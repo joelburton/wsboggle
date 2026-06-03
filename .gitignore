@@ -1,0 +1,33 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Built C extension
+data/libwords.so
+data/libwords.*.so
+
+# Runtime database
+data/wsboggle.db
+data/wsboggle.db-*
+
+# Frontend
+client/node_modules/
+client/dist/
+client/.vite/
+client/tsconfig.tsbuildinfo
+# Stray tsc emit (build script uses --noEmit; this is belt-and-suspenders)
+client/src/**/*.js
+
+# Editor / OS / tooling
+.DS_Store
+*~
+*.un~
+.idea/
+.vscode/
+.claude/
