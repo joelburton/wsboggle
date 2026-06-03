@@ -127,7 +127,8 @@ clubs_users   (club_id, user_id, joined_at)        # insert-only, no DELETE path
 games         (id, club_id NULL, created_by NULL,
                config JSON, board TEXT, legal_words TEXT,
                started_at, ends_at NULL, ended_at NULL)
-guesses       (game_id, user_id, word, is_legal, scored_points, ts)
+guesses       (game_id, user_id, word, is_legal, ts,
+               UNIQUE(game_id, user_id, word))
 chat_messages (club_id, user_id, text, ts)
 invite_codes  (code PK, label, created_at)         # admin-curated via SQL
 sessions      (id, user_id, expires_at)
@@ -147,6 +148,13 @@ Notes:
   in UI without a schema change.
 - `games.ends_at NULL` means untimed. The server only schedules a
   timer-expiry job when this is set.
+- `guesses` has `UNIQUE(game_id, user_id, word)` — the constraint
+  is the source of truth for "no duplicates per user per game."
+  `games.submit_guess` does a SELECT short-circuit for the common
+  case and treats the resulting IntegrityError as
+  `"already_submitted"` for the concurrent-submit race. Scoring
+  (with dupes-cancel applied) is computed on demand from this raw
+  log + the game's config, not stored.
 - `games.board` is the raw board string from `libwords.get_words`
   (row-major dice characters, with `1`–`6` encoding special faces
   like `Qu`/`In`/etc.). `games.legal_words` is the JSON-encoded
@@ -196,7 +204,12 @@ We accept hand-mirror sync risk as the cost of two languages.
 - `guessSubmitted` — broadcast to all — `{user_id, word, points}`. Used
   in **collaborative** mode. (Same accept-decision logic as
   `guessAccepted`; only the broadcast scope differs.)
-- `guessRejected` — to the guesser only — `{word, reason}`.
+- `guessRejected` — to the guesser only — `{word, reason}`. The
+  `reason` mirrors `games.GuessOutcome.result` — `"not_in_dictionary"`,
+  `"already_submitted"`, or `"game_inactive"` (the last fires when
+  the WS hands a guess to `submit_guess` after the server-side timer
+  has already expired; the WS handler should also broadcast
+  `gameEnded` if that hasn't happened yet).
 - `gameEnded` — `{results}` (per-player word lists with the configured
   scoring rules applied — dupes-cancel respected per `config`).
 - `feedback` — `{id, text, level}` for short toasts.
@@ -208,6 +221,12 @@ We accept hand-mirror sync risk as the cost of two languages.
   found by ≥ 2 players score 0 for everyone (Boggle classic). Multiple
   scoring ladders are ported from tboggle's `chooser.py`; v1 defaults to
   *Basic: 1-11* with no UI for picking.
+- **Single scoring engine.** `games._score_players` is the one
+  implementation of "group legal guesses by user, identify shared
+  words, apply dupes-cancel" — consumed by both `build_result`
+  (end-of-game payload) and `list_club_games` (history summaries).
+  Any future live-leaderboard work over WS should use it too rather
+  than reimplement the dupes-cancel logic.
 - **Timer:** server-owned. Hidden-until-end scoring means no per-tick
   score broadcasts — just a `gameEnded` at zero.
 - **Disconnect mid-game:** other members continue; timer doesn't pause.
