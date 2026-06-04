@@ -29,6 +29,7 @@ from datetime import UTC, datetime, timedelta
 
 from wsboggle import dice, dictionary, libwords, scoring
 from wsboggle.shared import (
+    BoardStats,
     ClubGameSummary,
     GameConfig,
     GameResult,
@@ -410,6 +411,23 @@ def to_snapshot(
             user_id=viewer_user_id,
             scoring_ladder=state.config.scoring_ladder,
         ),
+        board_stats=_board_stats(state),
+    )
+
+
+def _board_stats(state: GameState) -> BoardStats:
+    """Aggregate the board's findable totals from the solver's
+    word list + the game's scoring ladder. Cheap (the legal-word
+    set is already in memory on the :class:`GameState`)."""
+    if not state.legal_words:
+        return BoardStats(total_words=0, total_points=0, longest_word=0)
+    return BoardStats(
+        total_words=len(state.legal_words),
+        total_points=sum(
+            scoring.score_word(w, state.config.scoring_ladder)
+            for w in state.legal_words
+        ),
+        longest_word=max(len(w) for w in state.legal_words),
     )
 
 

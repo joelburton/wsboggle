@@ -1,0 +1,43 @@
+.panel {
+  display: grid;
+  grid-template-columns: auto 1fr 1fr;
+  gap: 0.15rem 0.75rem;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.head {
+  display: contents;
+}
+
+.colHead {
+  font-size: 0.75rem;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-align: right;
+}
+
+.row {
+  display: contents;
+}
+
+.label {
+  font-weight: 500;
+  color: #374151;
+  font-size: 0.9rem;
+}
+
+.you {
+  text-align: right;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.max {
+  text-align: right;
+  color: #6b7280;
+}

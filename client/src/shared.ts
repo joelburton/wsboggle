@@ -82,6 +82,15 @@ export type GuessRecord = {
   points: number;
 };
 
+export type BoardStats = {
+  /** Total findable legal words on this board. */
+  total_words: number;
+  /** Sum of all legal words' scores under the game's ladder. */
+  total_points: number;
+  /** Length of the longest legal word. */
+  longest_word: number;
+};
+
 export type GameSnapshot = {
   game_id: number;
   board: string[][];        // display grid; "Qu"/"In" already expanded
@@ -91,6 +100,7 @@ export type GameSnapshot = {
   ended_at: string | null;
   server_now: string;       // client uses this for clock-skew correction
   your_guesses: GuessRecord[];
+  board_stats: BoardStats;
 };
 
 export type GuessRequest = {

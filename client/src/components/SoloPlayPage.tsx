@@ -27,6 +27,7 @@ import type {
   MeResponse,
 } from "../shared";
 import { Board } from "./Board";
+import { BoardStats } from "./BoardStats";
 import { GameResultPanel } from "./GameResultPanel";
 import { Timer } from "./Timer";
 import { WordEntry } from "./WordEntry";
@@ -167,7 +168,10 @@ export function SoloPlayPage({ gameId, me }: Props) {
           </div>
         </div>
 
-        <WordList guesses={guesses} className={styles.wordList} />
+        <div className={styles.rightCol}>
+          <BoardStats stats={snapshot.board_stats} guesses={guesses} />
+          <WordList guesses={guesses} className={styles.wordList} />
+        </div>
       </div>
     </div>
   );

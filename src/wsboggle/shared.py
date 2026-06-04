@@ -164,6 +164,20 @@ class GuessRecord(BaseModel):
     points: int
 
 
+class BoardStats(BaseModel):
+    """Per-board "what's findable" counts: total legal words, the
+    points they're worth in aggregate, and the longest one. Constant
+    for the life of a game; clients render these as a "you vs. max"
+    table so a player can see how much of the board they've covered.
+
+    Safe to ship in the snapshot: in competitive mode it's the
+    *board*'s ceiling, not any opponent's progress."""
+
+    total_words: int
+    total_points: int
+    longest_word: int
+
+
 class GameSnapshot(BaseModel):
     """Returned when a game starts (or is loaded mid-play).
 
@@ -181,6 +195,7 @@ class GameSnapshot(BaseModel):
     ended_at: str | None
     server_now: str
     your_guesses: list[GuessRecord]
+    board_stats: BoardStats
 
 
 class GuessRequest(BaseModel):

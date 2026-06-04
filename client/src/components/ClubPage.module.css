@@ -288,6 +288,12 @@
   text-transform: lowercase;
 }
 
+.rightCol {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
 .wordListCol {
   background: white;
   padding: 1rem 1.25rem;

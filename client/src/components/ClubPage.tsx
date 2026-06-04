@@ -42,6 +42,7 @@ import type {
   MeResponse,
 } from "../shared";
 import { Board } from "./Board";
+import { BoardStats } from "./BoardStats";
 import { ChatPanel as FloatingChatPanel, ChatIndicator } from "./ChatPanel";
 import { GameResultPanel } from "./GameResultPanel";
 import { Timer } from "./Timer";
@@ -589,7 +590,10 @@ function PlayView({ snapshot, guesses, onGuess, onEndGame }: PlayProps) {
             </button>
           </div>
         </div>
-        <WordList guesses={guesses} className={styles.wordListCol} />
+        <div className={styles.rightCol}>
+          <BoardStats stats={snapshot.board_stats} guesses={guesses} />
+          <WordList guesses={guesses} className={styles.wordListCol} />
+        </div>
       </div>
     </section>
   );
