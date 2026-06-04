@@ -172,6 +172,24 @@ def find_last_club_config(
     return GameConfig.model_validate_json(row["config"])
 
 
+def find_unended_games(db: sqlite3.Connection) -> list[GameState]:
+    """Every game whose ``ended_at`` is still NULL across all clubs.
+
+    Used at server startup to recover from a restart that interrupted
+    one or more active games — the in-memory timer tasks are gone,
+    so we either re-schedule them (timer still in the future) or
+    sweep them shut (timer already expired). Untimed games stay
+    open and wait for a manual ``endGame``.
+    """
+    rows = db.execute(
+        "SELECT id, club_id, created_by, config, board, legal_words, "
+        "started_at, ends_at, ended_at FROM games "
+        "WHERE ended_at IS NULL "
+        "ORDER BY id ASC"
+    ).fetchall()
+    return [_row_to_state(row) for row in rows]
+
+
 def find_active_club_game(
     db: sqlite3.Connection, club_id: int
 ) -> GameState | None:

@@ -31,11 +31,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     Opens the SQLite DB once on startup (which also runs the schema
     bootstrap if the DB file is new) and stashes the connection on
-    ``app.state.db`` for handlers to use.
+    ``app.state.db`` for handlers to use. Then sweeps any
+    crash-orphaned games via :func:`club_ws.recover_active_games`:
+    timers that already expired during downtime get marked ended;
+    timers still in the future get a fresh asyncio task scheduled
+    so ``gameEnded`` still fires for whoever is connected.
     """
     conn: sqlite3.Connection = db.connect()
     app.state.db = conn
     try:
+        club_ws.recover_active_games(app)
         yield
     finally:
         conn.close()

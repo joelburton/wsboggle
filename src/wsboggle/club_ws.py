@@ -42,7 +42,7 @@ import sqlite3
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, WebSocket
+from fastapi import APIRouter, FastAPI, WebSocket
 from fastapi.websockets import WebSocketDisconnect
 from pydantic import TypeAdapter, ValidationError
 
@@ -454,7 +454,7 @@ async def _handle_new_game(
         # gameStarted because asyncio dispatches them in order.
         if state.ends_at is not None:
             _timers[club_id] = asyncio.create_task(
-                _run_timer(club_id, state.id, state.ends_at)
+                _run_timer(ws.app, club_id, state.id, state.ends_at)
             )
 
     # Broadcast outside the lock — sending to every socket can take
@@ -572,29 +572,27 @@ async def _handle_end_game(
 # --- Server-driven timer --------------------------------------------------
 
 
-async def _run_timer(club_id: int, game_id: int, ends_at: datetime) -> None:
-    """Sleep until ``ends_at`` then end the game and broadcast the
-    result.
+async def _run_timer(
+    app: FastAPI, club_id: int, game_id: int, ends_at: datetime
+) -> None:
+    """Sleep until ``ends_at`` then end the game and broadcast.
+
+    Takes the FastAPI app so it can pull ``app.state.db`` directly —
+    works for both the live ``newGame`` path (which has a websocket
+    handy) and the startup-recovery path (which doesn't have any
+    sockets yet).
 
     A ``CancelledError`` (server shutdown, manual ``endGame``) is
-    swallowed silently — the manual path will have already done
-    the end + broadcast itself."""
+    swallowed silently: the manual path will have already done the
+    end + broadcast itself, and a shutdown can't broadcast anyway.
+    """
     try:
         now = datetime.now(ends_at.tzinfo)
         delay = (ends_at - now).total_seconds()
         if delay > 0:
             await asyncio.sleep(delay)
 
-        # Open a fresh handle: the connection on app.state.db is
-        # the same one HTTP handlers use; sqlite3 connections are
-        # thread-safe under our autocommit settings. Reading it via
-        # any live socket avoids a module-global coupling.
-        sockets_by_user = _registry.get(club_id) or {}
-        if not sockets_by_user:
-            return  # nobody to tell; the row will be cleaned up later
-        any_ws = next(iter(next(iter(sockets_by_user.values()))))
-        db: sqlite3.Connection = any_ws.app.state.db
-
+        db: sqlite3.Connection = app.state.db
         state = games.find_game(db, game_id)
         if state is None or state.ended_at is not None:
             return
@@ -606,3 +604,48 @@ async def _run_timer(club_id: int, game_id: int, ends_at: datetime) -> None:
         # end may have already replaced or cleared it).
         if _timers.get(club_id) is asyncio.current_task():
             _timers.pop(club_id, None)
+
+
+# --- Startup recovery ----------------------------------------------------
+
+
+def recover_active_games(app: FastAPI) -> None:
+    """Bring active games back into a consistent state at boot.
+
+    For every game with ``ended_at IS NULL``:
+
+    - Untimed (``ends_at IS NULL``) → leave alone. It waits for a
+      manual ``endGame``.
+    - Timer already expired → end it now in the DB. No broadcast
+      (no sockets are connected yet); whoever next connects sees
+      ``current_game = null`` in their snapshot and the result row
+      in history. This is the "stuck game from a crash" sweep.
+    - Timer still in the future → schedule a fresh asyncio task to
+      fire ``gameEnded`` at the right time. Members who reconnect
+      see the in-progress board with the correct remaining time
+      because ``ends_at`` lives in the DB; the recovered task
+      fires for whoever is connected when the timer hits zero.
+
+    Called from the lifespan startup after :func:`db.connect`.
+    Synchronous DB calls + ``create_task`` (which only schedules,
+    doesn't await) keep this fast at boot.
+    """
+    db: sqlite3.Connection = app.state.db
+    for state in games.find_unended_games(db):
+        if state.ends_at is None:
+            continue  # untimed; manual end only
+        now = datetime.now(state.ends_at.tzinfo)
+        if state.ends_at <= now:
+            # Stale: timer would have fired during the downtime.
+            games.end_game(db, state)
+            continue
+        # Live: re-schedule the timer task for the remaining window.
+        # The club_id is non-None on multiplayer games; solo games
+        # have club_id=None and don't have a registry/broadcast
+        # surface to fire into, but their ends_at is still
+        # meaningful — solo end happens via HTTP route. Skip them.
+        if state.club_id is None:
+            continue
+        _timers[state.club_id] = asyncio.create_task(
+            _run_timer(app, state.club_id, state.id, state.ends_at)
+        )
