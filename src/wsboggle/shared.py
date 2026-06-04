@@ -321,7 +321,7 @@ class PlayerScoreSummary(BaseModel):
 class ClubGameSummary(BaseModel):
     """One row in ``GET /api/clubs/:id/games`` — only ended games appear.
 
-    Per-player final totals are inlined so the lobby can render
+    Per-player final totals are inlined so the club view can render
     leaderboard rows without an N+1 fetch.
     """
 
@@ -346,14 +346,14 @@ class DefineResponse(BaseModel):
 # right subclass on parse. The TS mirror uses the same shape so the
 # client can switch on `msg.type`.
 #
-# This slice covers the lobby surface (chat + presence). The game-flow
+# This slice covers the main club view (chat + presence). The game-flow
 # messages from CLAUDE.md (`gameStarted`, `guessAccepted`,
 # `guessSubmitted`, `guessRejected`, `gameEnded`, the client-side
 # `guess`, `newGame`, `endGame`) get added when the multiplayer game
 # loop lands.
 
 
-# --- Lobby payload pieces -------------------------------------------------
+# --- Club-state payload pieces -------------------------------------------
 
 
 class ClubMember(BaseModel):
@@ -460,7 +460,7 @@ class SClubState(BaseModel):
 
     ``last_config`` is the config of the club's most recent game
     (active or ended), or ``None`` for a club that has never
-    played. The lobby pre-fills the new-game dialog from it and
+    played. The club view pre-fills the new-game dialog from it and
     offers a one-click "Play again" shortcut.
     """
 

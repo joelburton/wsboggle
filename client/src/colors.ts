@@ -7,7 +7,7 @@
  * eight palette entries — no server coordination needed, every
  * client agrees that "moth" is the same shade everywhere.
  *
- * Used for: the lobby member list (dot + handle color when in-club),
+ * Used for: the club member list (dot + handle color when in-club),
  * chat handles, and per-player blocks in the end-of-game result
  * panel. Future use: when collaborative mode lands, the same color
  * marks which player added each word to the shared list.

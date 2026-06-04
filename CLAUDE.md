@@ -114,8 +114,10 @@ These terms are load-bearing — use them consistently in code, UI, and docs:
   to clubs by handle.
 
 Explicitly *not* used:
-- **Room** — implies transient lobby semantics ("who's in it now"). Our
-  model is durable membership; *club* captures that better.
+- **Room** / **Lobby** — both imply transient "who's in it now"
+  semantics. Our model is durable membership; *club* captures that
+  better. Even when no game is active, that view is the *main club
+  view*, not "the lobby."
 - **Puzzle** — that's a crossplay word.
 
 ## Data model
@@ -290,7 +292,7 @@ in doubt, do what crossplay does.
   chat panel** (the "hey, look at this" mechanic).
 - **Presence label is "in club", not "online".** The user's mental
   model is "is moth here with me right now," not "is moth
-  authenticated to the server." Applies to the lobby member list,
+  authenticated to the server." Applies to the club's member list,
   presence dots, and last-seen labels ("last in club: 2h ago").
 - **Routing is hand-rolled** in `client/src/routing.ts`. No
   react-router. The route set is small (`/`, `/c/:id`, `/solo`,
@@ -302,7 +304,7 @@ in doubt, do what crossplay does.
 
 - `/` — home page. Logged-in: list of clubs + Solo button + Invite button.
   Logged-out: login/register.
-- `/c/:id` — club page. Lobby / in-game / post-game states all live on
+- `/c/:id` — club page. Main / in-game / post-game states all live on
   this URL; the client tracks which via WS state.
 - `/solo` — solo play. HTTP-only.
 - `/login`, `/register` — auth. The register form has an invite-code

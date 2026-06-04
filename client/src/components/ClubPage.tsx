@@ -2,13 +2,13 @@
  * The club page (`/c/:id`).
  *
  * Owns one club WebSocket via :func:`useClubSocket` and renders one
- * of three views off the socket state: the lobby (members, new-game
- * form, recent games), the in-progress game (board + entry + word
- * list), or the end-of-game result panel.
+ * of three views off the socket state: the main club view (members,
+ * new-game form, recent games), the in-progress game (board + entry
+ * + word list), or the end-of-game result panel.
  *
  * Chat layout follows the view:
  *
- * - Lobby: inline chat in the right column. There's room for it and
+ * - Main: inline chat in the right column. There's room for it and
  *   chat is part of the "what's everyone up to" surface.
  * - Game / result: floating draggable chat (port of crossplay's
  *   `ChatPanel`). The board needs the page width during play, and
@@ -71,7 +71,7 @@ export function ClubPage({ clubId, me }: Props) {
   const [historyError, setHistoryError] = useState<string | null>(null);
 
   // Floating chat state. Only meaningful when the view is "playing"
-  // or "result" (in lobby the chat is inline and always visible).
+  // or "result" (the main club view has inline chat always visible).
   const [chatOpen, setChatOpen] = useState(false);
   // Last chat id the user has "seen" — anything beyond this is
   // counted as unread on the reopen badge. Bumped to the latest id
@@ -96,11 +96,11 @@ export function ClubPage({ clubId, me }: Props) {
 
   // Pick the view + whether chat is inline or floating off the
   // socket state.
-  const mode: "lobby" | "playing" | "result" =
+  const mode: "main" | "playing" | "result" =
     state.gameResult !== null ? "result"
       : state.currentGame !== null ? "playing"
-      : "lobby";
-  const chatLayout: "inline" | "floating" = mode === "lobby" ? "inline" : "floating";
+      : "main";
+  const chatLayout: "inline" | "floating" = mode === "main" ? "inline" : "floating";
 
   // Keep `seenChatId` glued to the latest while the panel is open
   // (or chat is inline) so unread-count is always 0 in that case.
@@ -209,8 +209,8 @@ export function ClubPage({ clubId, me }: Props) {
               onEndGame={sendEndGame}
             />
           )}
-          {mode === "lobby" && (
-            <LobbyView
+          {mode === "main" && (
+            <ClubMainView
               clubId={clubId}
               me={me}
               members={state.members}
@@ -257,9 +257,9 @@ export function ClubPage({ clubId, me }: Props) {
   );
 }
 
-// --- Lobby --------------------------------------------------------------
+// --- Main club view (no active game) ------------------------------------
 
-type LobbyProps = {
+type ClubMainProps = {
   clubId: number;
   me: MeResponse;
   members: { user_id: number; handle: string; online: boolean }[];
@@ -271,7 +271,7 @@ type LobbyProps = {
   onStart: (config: GameConfig) => void;
 };
 
-function LobbyView(props: LobbyProps) {
+function ClubMainView(props: ClubMainProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const disabled = !props.allOnline || !props.connected;
   const disabledReason = !props.connected
@@ -447,8 +447,8 @@ type NewGameDialogProps = {
  *  on the last game is one dropdown change + Start.
  *
  *  Backdrop click and Esc both cancel; Enter on the form submits.
- *  No portal — the dialog renders inline beneath the lobby and the
- *  fixed positioning + z-index takes it visually full-screen.
+ *  No portal — the dialog renders inline beneath the club view and
+ *  the fixed positioning + z-index takes it visually full-screen.
  */
 function NewGameDialog({ initial, onCancel, onStart }: NewGameDialogProps) {
   const [diceSet, setDiceSet] = useState(initial?.dice_set ?? "4");
@@ -559,13 +559,13 @@ function ResultView({ result, viewerUserId, onDismiss }: ResultProps) {
     <section className={styles.section}>
       <GameResultPanel result={result} viewerUserId={viewerUserId} />
       <div className={styles.resultActions}>
-        <button onClick={onDismiss}>Back to lobby</button>
+        <button onClick={onDismiss}>Return to club</button>
       </div>
     </section>
   );
 }
 
-// --- Inline chat panel (lobby only) -------------------------------------
+// --- Inline chat panel (main club view only) ----------------------------
 
 type InlineChatProps = {
   chat: ChatMessage[];
@@ -575,7 +575,7 @@ type InlineChatProps = {
   disabled: boolean;
 };
 
-/** The chat panel rendered in the lobby's right column. Same lines,
+/** The chat panel rendered in the main club view's right column. Same lines,
  *  same `!`-bold and URL-linkify behavior as the floating panel —
  *  only the container differs (inline vs draggable). */
 function InlineChatPanel({

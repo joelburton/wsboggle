@@ -157,7 +157,7 @@ def find_last_club_config(
     ``None`` when the club has never played.
 
     Surfaces in ``clubState.last_config`` so the new-game dialog
-    can pre-fill from "what we played last" and the lobby can
+    can pre-fill from "what we played last" and the club view can
     offer a one-click "Play again" shortcut. CLAUDE.md notes that
     last-config-per-club is derived at read time from the games
     table — no separate config column on ``clubs``.
@@ -664,7 +664,7 @@ def list_club_games(
     Active games are excluded — the live one (if any) is what the WS
     surfaces; history is "what we've finished." Per-player final
     totals (with dupes-cancel applied per the game's own config) are
-    inlined so the lobby's recent-games list doesn't need per-row
+    inlined so the club view's recent-games list doesn't need per-row
     fetches.
     """
     rows = db.execute(

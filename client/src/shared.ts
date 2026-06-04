@@ -186,7 +186,7 @@ export type DefineResponse = {
 // (gameStarted / guess* / gameEnded etc.) get added when the
 // multiplayer game loop lands.
 
-// Lobby payload pieces
+// Club-state payload pieces
 
 export type ClubMember = {
   user_id: number;
@@ -225,7 +225,7 @@ export type SClubState = {
    *  `your_guesses` for the connecting user. */
   current_game: GameSnapshot | null;
   /** Config of the club's most recently-started game, or null for
-   *  a brand-new club. The lobby pre-fills the new-game dialog
+   *  a brand-new club. The club view pre-fills the new-game dialog
    *  from this and shows a one-click "Play again". */
   last_config: GameConfig | null;
 };

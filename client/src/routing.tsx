@@ -8,7 +8,7 @@
  *   /solo          → new solo game (config dialog)
  *   /solo/:id      → solo play (in-game + results)
  *   /clubs/new     → create-club form
- *   /c/:id         → club page (lobby; in-game once game flow lands)
+ *   /c/:id         → club page (main view / in-game / result)
  *   /games/:id     → game review (not built in v1 milestone)
  *
  * `useRoute` subscribes to popstate so back/forward and our own

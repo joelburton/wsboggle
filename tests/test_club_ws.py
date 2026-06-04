@@ -1,6 +1,6 @@
 """Tests for the club WebSocket — auth, snapshot, chat, presence.
 
-These cover the lobby surface only; game-flow messages over the WS
+These cover the main club view surface only; game-flow messages over the WS
 ship in the next milestone and will have their own test module.
 
 ``TestClient.websocket_connect`` carries the client's cookies into

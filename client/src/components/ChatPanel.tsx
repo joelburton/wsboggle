@@ -22,7 +22,7 @@
  *   binds Esc + `/` as a global shortcut.
  *
  * Used together with :class:`InlineChatPanel` in :file:`ClubPage`,
- * which picks one or the other based on whether the lobby has room
+ * which picks one or the other based on whether the main club view has room
  * for an inline column.
  */
 

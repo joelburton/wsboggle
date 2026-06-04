@@ -43,7 +43,7 @@ export type ClubSocketState = {
   chat: ChatMessage[];
 
   /** Active game's snapshot (board, timer, config), or null when
-   *  the club is in the lobby. Updated by clubState (on connect),
+   *  no game is running. Updated by clubState (on connect),
    *  gameStarted (new game), and cleared on gameEnded. */
   currentGame: GameSnapshot | null;
   /** Your own guesses for the active game. Seeded from
@@ -52,10 +52,10 @@ export type ClubSocketState = {
   yourGuesses: GuessRecord[];
   /** End-of-game payload, populated on `gameEnded`. The consumer
    *  shows it and then clears it (via `clearResult`) when the
-   *  user opts back into the lobby. */
+   *  user returns to the main club view. */
   gameResult: GameResult | null;
   /** Config of the club's most recently-started game. Used by the
-   *  lobby to pre-fill the new-game dialog and surface a one-click
+   *  club view to pre-fill the new-game dialog and surface a one-click
    *  "Play again". Null for clubs that have never played. Updates
    *  on clubState (initial) and gameStarted (when a fresh game
    *  becomes the "last"). */
