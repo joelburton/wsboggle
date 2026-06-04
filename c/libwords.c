@@ -27,6 +27,68 @@ perror(err_msg); \
 exit(1); \
 }
 
+
+/****************************** ARENA *****************************/
+
+/* Per-board bump allocator. Replaces ~2N malloc/free pairs per
+ * board attempt (one BoardWord and one word-string per accepted
+ * word) with a single upfront allocation plus an O(1) reset
+ * between rejection-sampler retries.
+ *
+ * The arena lives inline on the Board and survives until Python
+ * calls free_words on the (returned word_array, board_handle)
+ * pair — the word_array's char* pointers reference strings that
+ * sit *inside* the arena, so the buffer can't be released earlier.
+ *
+ * Allocations are aligned to 8 bytes (enough for any field in
+ * BoardWord on 64-bit targets). Overflow is fatal — the arena is
+ * sized generously enough that hitting the cap means a bug, not a
+ * legitimate edge.
+ */
+
+typedef struct {
+    char *buf;
+    size_t size;
+    size_t used;
+} Arena;
+
+#define ARENA_BYTES (256 * 1024)
+
+static void arena_init(Arena *a, size_t size) {
+    a->buf = malloc(size);
+    if (a->buf == NULL) FATAL2("arena malloc failed", "");
+    a->size = size;
+    a->used = 0;
+}
+
+static void arena_free(Arena *a) {
+    free(a->buf);
+    a->buf = NULL;
+    a->size = a->used = 0;
+}
+
+static void arena_reset(Arena *a) {
+    a->used = 0;
+}
+
+static void *arena_alloc(Arena *a, size_t n) {
+    const size_t aligned = (a->used + 7) & ~(size_t) 7;
+    if (aligned + n > a->size) {
+        FATAL2("arena exhausted (bump ARENA_BYTES)", "");
+    }
+    void *p = a->buf + aligned;
+    a->used = aligned + n;
+    return p;
+}
+
+/** strdup-equivalent that allocates the copy from the arena. */
+static char *arena_strdup(Arena *a, const char *s, size_t len) {
+    char *out = arena_alloc(a, len + 1);
+    memcpy(out, s, len);
+    out[len] = '\0';
+    return out;
+}
+
 typedef struct {
     const char *word;
     bool found;
@@ -104,6 +166,7 @@ typedef struct Board {
     int longest;
     int score;
     char *dice_simple;
+    Arena arena;   /* backs BoardWord structs + word strings */
 } Board;
 
 Board* make_board(
@@ -143,6 +206,7 @@ Board* make_board(
     b->legal = NULL;
     b->word_array = NULL;
     b->dice_simple = NULL;
+    arena_init(&b->arena, ARENA_BYTES);
     return b;
 }
 
@@ -218,8 +282,9 @@ enum ADD_RESULT {
 static enum ADD_RESULT add_word(
     Board *board, const char word[], const int length)
 {
-    // ReSharper disable once CppDFAMemoryLeak
-    BoardWord *b_word = malloc(sizeof(BoardWord));
+    // Both the struct and (eventually) the string come from the
+    // arena. On retry the whole arena resets; no per-word free()s.
+    BoardWord *b_word = arena_alloc(&board->arena, sizeof(BoardWord));
     b_word->word = word;  // temporary: points to caller's stack buffer
     b_word->found = false;
     b_word->len = length;
@@ -227,11 +292,10 @@ static enum ADD_RESULT add_word(
     BoardWord **found = tsearch(
         b_word, (void **) &board->legal, boardwords_cmp);
 
-    // if already in tree, return false -- it's a dup
-    if (*found != b_word) {
-        free(b_word);
-        return ADD_DUP;
-    }
+    // if already in tree, the just-allocated BoardWord becomes
+    // arena dead-weight until the next retry resets — small and
+    // bounded, so we leave it rather than burn a tfind walk first.
+    if (*found != b_word) return ADD_DUP;
 
     // Tentative totals — if either bust the budget, back the
     // insert out so the tree never holds a BoardWord whose
@@ -241,19 +305,17 @@ static enum ADD_RESULT add_word(
     const int new_score = board->score + board->score_counts[length];
     if (new_count > board->max_words || new_score > board->max_score) {
         tdelete(b_word, (void **) &board->legal, boardwords_cmp);
-        free(b_word);
         return ADD_FAIL;
     }
 
-    // Commit: stable copy of the word string + budget update.
-    // The strdup'd content equals the original byte-for-byte, so
-    // the tree's ordering invariant (string compare on ->word) is
-    // preserved when we swap the pointer.
-    b_word->word = strdup(word);
+    // Commit: stable copy of the word string into the arena +
+    // budget update. The arena copy is byte-equal to the original,
+    // so the tree's ordering invariant (string compare on ->word)
+    // is preserved when we swap the pointer.
+    b_word->word = arena_strdup(&board->arena, word, length);
     board->num_words = new_count;
     board->score = new_score;
     if (length > board->longest) board->longest = length;
-    // ReSharper disable once CppDFAMemoryLeak
     return ADD_ADDED;
 }
 
@@ -457,25 +519,22 @@ static void collect_bws(Board *board, BoardWord **out) {
 }
 #endif
 
-/** Destroy a board's legal-word tree.
+/** Drain a board's legal-word tree.
  *
- * Used in two places with subtly different semantics:
+ * Used in two places with the same shape — collect every
+ * BoardWord, ``tdelete`` each so tsearch releases its internal
+ * RB-tree node. The BoardWord structs and word strings live in
+ * the arena, so we don't ``free`` them here; the caller decides
+ * whether to ``arena_reset`` after draining (find_all_words
+ * does; bws_btree_to_array doesn't, because word_array's pointers
+ * still reference the strings).
  *
- * - At the top of find_all_words: ``free_strings == true``. The
- *   previous retry's words are dead weight — free both the
- *   BoardWord structs and the strdup'd word strings.
- * - In bws_btree_to_array, after the strings have been copied into
- *   ``word_array``: ``free_strings == false``. The strings live on
- *   in word_array (and Python's free_words will release them); we
- *   only need to drain the tree internals here.
- *
- * Walks the tree once to collect every BoardWord, then tdeletes
- * each (which frees the tsearch internal node) and frees the
- * BoardWord struct. After this the tree is empty and
- * ``board->legal`` is NULL.
+ * The temp BoardWord** scratch is a system-malloc rather than an
+ * arena alloc — find_all_words is about to reset the arena, so
+ * arena-allocating the scratch would invalidate it mid-loop.
  */
 
-static void free_tree(Board *board, bool free_strings) {
+static void drain_tree(Board *board) {
     if (board->legal == NULL || board->num_words == 0) {
         board->legal = NULL;
         return;
@@ -484,20 +543,28 @@ static void free_tree(Board *board, bool free_strings) {
     collect_bws(board, bws);
 
     for (int i = 0; i < board->num_words; i++) {
-        BoardWord *bw = bws[i];
-        tdelete(bw, (void **) &board->legal, boardwords_cmp);
-        if (free_strings) free((void *) bw->word);
-        free(bw);
+        tdelete(bws[i], (void **) &board->legal, boardwords_cmp);
     }
     free(bws);
     board->legal = NULL;
 }
 
-/** Populate ``board->word_array`` with the strdup'd word pointers
- *  and drain the tree (which is the sole other holder of those
- *  pointers). After this returns, ``word_array`` owns the strings,
- *  the tree is gone, and Python's free_words is responsible for
- *  releasing both. */
+/* Backwards-compatible alias for the one call site that still uses
+ * the old name (the forward declaration up top). Behavior matches
+ * "drain tree, then arena_reset" — which is what find_all_words
+ * wants. */
+static void free_tree(Board *board, bool unused) {
+    (void) unused;
+    drain_tree(board);
+    arena_reset(&board->arena);
+}
+
+/** Populate ``board->word_array`` (a fresh system-malloc) with the
+ *  arena-resident word strings, then drain the tree. Critically we
+ *  do NOT reset the arena here — the word_array's pointers point
+ *  into the arena, and Python needs to read them before
+ *  free_words tears it down.
+ */
 
 void bws_btree_to_array(Board *board) {
     board->word_array = malloc(((size_t) board->num_words + 1) * sizeof(char *));
@@ -506,12 +573,10 @@ void bws_btree_to_array(Board *board) {
 
     for (int i = 0; i < board->num_words; i++) {
         BoardWord *bw = bws[i];
-        // Hand the strdup'd string off to the word_array.
-        // (The const-cast is intentional: word_array is the new
-        // owner and Python will eventually free() each entry.)
+        // word_array borrows a pointer into the arena; Python
+        // reads it before the arena is freed in free_words.
         board->word_array[i] = (char *) bw->word;
         tdelete(bw, (void **) &board->legal, boardwords_cmp);
-        free(bw);
     }
     board->word_array[board->num_words] = NULL;
     free(bws);
@@ -533,7 +598,8 @@ char **get_words(
     int max_tries,
     int random_seed,
     int *num_tries,
-    char **dice_simple
+    char **dice_simple,
+    void **board_handle
 ) {
     srandom(random_seed);
     Board *b = make_board(
@@ -553,28 +619,29 @@ char **get_words(
     *num_tries = fill_board(b, max_tries);
     *dice_simple = b->dice_simple;
     bws_btree_to_array(b);
-    char **result = b->word_array;
-    // word_array + dice_simple are now owned by the caller; the
-    // Board struct itself is just metadata and can go.
-    free(b);
-    return result;
+    // word_array's char* pointers reference strings *inside* the
+    // arena, which lives on Board. Python must hold the Board
+    // handle until it's done reading the words; free_words then
+    // tears the arena (and the Board) down.
+    *board_handle = b;
+    return b->word_array;
 }
 
 
-/** Release the (word_array, dice_simple) pair returned by
- *  ``get_words``. Frees each strdup'd word, the array itself, and
- *  the dice string. NULL on either argument is allowed so the
- *  Python wrapper can call this unconditionally in a finally
+/** Release the (word_array, dice_simple, board_handle) triple
+ *  returned by ``get_words``. NULL on any argument is allowed so
+ *  the Python wrapper can call this unconditionally in a finally
  *  block. */
 
-void free_words(char **words, char *dice_simple) {
-    if (words != NULL) {
-        for (int i = 0; words[i] != NULL; i++) {
-            free(words[i]);
-        }
-        free(words);
+void free_words(char **words, char *dice_simple, void *board_handle) {
+    Board *b = (Board *) board_handle;
+    if (b != NULL) {
+        // Word strings live in the arena; this is what releases
+        // them. Don't iterate `words` freeing entries — they're
+        // arena slabs, not malloc'd.
+        arena_free(&b->arena);
+        free(b);
     }
-    if (dice_simple != NULL) {
-        free(dice_simple);
-    }
+    if (words != NULL) free(words);
+    if (dice_simple != NULL) free(dice_simple);
 }

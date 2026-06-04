@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import ctypes
 import os
-from ctypes import POINTER, byref, c_char_p, c_int
+from ctypes import POINTER, byref, c_char_p, c_int, c_void_p
 from dataclasses import dataclass
 from pathlib import Path
 from random import randint
@@ -77,7 +77,7 @@ def _load_library() -> ctypes.CDLL:
     # argtypes set per-call because the dice / score arrays are
     # variable-length (depends on the dice set and ladder).
 
-    lib.free_words.argtypes = [POINTER(c_char_p), c_char_p]
+    lib.free_words.argtypes = [POINTER(c_char_p), c_char_p, c_void_p]
     lib.free_words.restype = None
 
     return lib
@@ -151,6 +151,7 @@ def generate_board(
 
     tries = c_int(0)
     raw_board_buf = c_char_p()
+    board_handle = c_void_p()
 
     words_p = lib.get_words(
         dice_arr,
@@ -168,6 +169,7 @@ def generate_board(
         c_int(random_seed),
         byref(tries),
         byref(raw_board_buf),
+        byref(board_handle),
     )
 
     try:
@@ -179,18 +181,19 @@ def generate_board(
 
         raw_board = raw_board_buf.value.decode("utf-8")
 
-        # Walk the null-terminated word array.
+        # Walk the null-terminated word array. Each entry is a
+        # pointer into the C-side arena; the decode below copies the
+        # bytes into Python-owned strings before the arena dies.
         words: list[str] = []
         i = 0
         while words_p[i]:
             words.append(words_p[i].decode("utf-8").lower())
             i += 1
     finally:
-        # Hand the C-side allocations back. raw_board_buf carries the
-        # dice_simple pointer the solver set via byref(); after this
-        # call its underlying pointer is invalid, so the decode +
-        # word-list build above must already be done.
-        lib.free_words(words_p, raw_board_buf)
+        # Releases the arena (and with it every word's bytes), the
+        # array itself, the dice-simple buffer, and the Board
+        # metadata. After this call every pointer above is dead.
+        lib.free_words(words_p, raw_board_buf, board_handle)
 
     return GeneratedBoard(
         raw_board=raw_board,
