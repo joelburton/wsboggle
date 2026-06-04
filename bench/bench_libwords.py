@@ -28,6 +28,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import statistics
 import sys
 import time
@@ -177,7 +178,52 @@ def run_profile(profile: Profile, n: int, *, max_tries: int = 50_000) -> Result:
     )
 
 
-def print_result(profile: Profile, r: Result) -> None:
+# --- Determinism fingerprint --------------------------------------------
+
+
+# Seeds used for the determinism check. Fixed to 10 so the digest is
+# stable regardless of bench --n; the timing run uses --n boards
+# starting from the same BASE_SEED, so the first 10 there are the
+# same boards fingerprinted here.
+FINGERPRINT_N = 10
+
+
+def fingerprint(profile: Profile) -> str:
+    """SHA-256 over the first :data:`FINGERPRINT_N` boards of one
+    profile.
+
+    Hashes ``(raw_board || sorted-words-csv)`` for each board, then
+    folds them together. Two libwords builds that produce the same
+    boards from the same seeds will agree on this digest; any
+    semantic change (different shuffles, dropped words, wrong
+    score-ordering) will not. Pure-perf refactors that touch
+    allocation, dedup data structure, etc. should leave the digest
+    untouched.
+    """
+    dset = dice.get_by_name(profile.dice_set)
+    h = hashlib.sha256()
+    for i in range(FINGERPRINT_N):
+        gb = libwords.generate_board(
+            dset,
+            min_legal_length=3,
+            min_words=profile.min_words,
+            max_words=profile.max_words,
+            min_score=profile.min_score,
+            max_score=profile.max_score,
+            min_longest=profile.min_longest,
+            max_longest=profile.max_longest,
+            random_seed=BASE_SEED + i,
+        )
+        # legal_words is already lowercase + sorted by generate_board;
+        # raw_board is the dice string with multiface chars encoded.
+        h.update(gb.raw_board.encode("utf-8"))
+        h.update(b"|")
+        h.update(",".join(gb.legal_words).encode("utf-8"))
+        h.update(b"\n")
+    return h.hexdigest()[:16]  # short prefix is plenty for visual diff
+
+
+def print_result(profile: Profile, r: Result, fp: str) -> None:
     print(f"\n=== {profile.name} ({profile.description}) ===")
     print(f"  dice set       : {profile.dice_set}")
     bounds = []
@@ -195,6 +241,7 @@ def print_result(profile: Profile, r: Result) -> None:
     print(f"  per-board p95  : {r.p95_ms:.2f} ms")
     print(f"  total retries  : {r.total_tries}")
     print(f"  retries / board: {r.total_tries / r.boards:.1f}")
+    print(f"  fingerprint    : {fp}")
 
 
 def main() -> None:
@@ -233,7 +280,8 @@ def main() -> None:
 
     for p in profiles:
         r = run_profile(p, args.n, max_tries=args.max_tries)
-        print_result(p, r)
+        fp = fingerprint(p)
+        print_result(p, r, fp)
 
 
 if __name__ == "__main__":

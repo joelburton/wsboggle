@@ -201,8 +201,11 @@ enum ADD_RESULT {
 
 /** Add word to the tree of legal words.
  *
- * Returns T/F if it is new.
- *
+ * Returns ADD_ADDED if the word was new and fits the board's
+ * budget, ADD_DUP if we've already accepted this word (no state
+ * change), or ADD_FAIL if accepting this word would bust max_words
+ * or max_score (state is rolled back before returning, so the
+ * caller can retry on a fresh board without poisoning the tree).
  */
 
 static enum ADD_RESULT add_word(
@@ -210,7 +213,7 @@ static enum ADD_RESULT add_word(
 {
     // ReSharper disable once CppDFAMemoryLeak
     BoardWord *b_word = malloc(sizeof(BoardWord));
-    b_word->word = word;
+    b_word->word = word;  // temporary: points to caller's stack buffer
     b_word->found = false;
     b_word->len = length;
 
@@ -223,13 +226,25 @@ static enum ADD_RESULT add_word(
         return ADD_DUP;
     }
 
-    board->num_words++;
-    if (board->num_words > board->max_words) return ADD_FAIL;
+    // Tentative totals — if either bust the budget, back the
+    // insert out so the tree never holds a BoardWord whose
+    // ->word points to caller-stack memory (which goes away as
+    // soon as find_all_words returns and we retry).
+    const int new_count = board->num_words + 1;
+    const int new_score = board->score + board->score_counts[length];
+    if (new_count > board->max_words || new_score > board->max_score) {
+        tdelete(b_word, (void **) &board->legal, boardwords_cmp);
+        free(b_word);
+        return ADD_FAIL;
+    }
 
-    board->score += board->score_counts[b_word->len];
-    if (board->score > board->max_score) return ADD_FAIL;
-
-    b_word->word = strdup(word);   // know we'll keep it, so copy it
+    // Commit: stable copy of the word string + budget update.
+    // The strdup'd content equals the original byte-for-byte, so
+    // the tree's ordering invariant (string compare on ->word) is
+    // preserved when we swap the pointer.
+    b_word->word = strdup(word);
+    board->num_words = new_count;
+    board->score = new_score;
     if (length > board->longest) board->longest = length;
     // ReSharper disable once CppDFAMemoryLeak
     return ADD_ADDED;
