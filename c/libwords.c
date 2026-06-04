@@ -1,6 +1,5 @@
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -90,8 +89,7 @@ static char *arena_strdup(Arena *a, const char *s, size_t len) {
 
 typedef struct {
     const char *word;
-    bool found;
-    int len;
+    int len;   /* index into score_counts; also string length */
 } BoardWord;
 
 
@@ -174,6 +172,7 @@ void read_dawg(const char *path) {
 #else
 void read_dawg(const char *path) {
     FILE *f = fopen(path, "rb");
+    if (f == NULL) FATAL2("Cannot open dict at", path);
     int32_t nelems;
     if (fread(&nelems, 4, 1, f) != 1) FATAL2("Cannot get size of", path);
     fseek(f, 0, SEEK_END);
@@ -321,23 +320,19 @@ const short MULTIFACE_DICE[] = {
 };
 
 void make_dice(Board *b) {
-    shuffle_array(b->set, b->height * b->width);
-    b->dice_simple = malloc((b->height * b->width + 1) * sizeof(char));
+    const int n = b->height * b->width;
+    shuffle_array(b->set, n);
+    b->dice_simple = malloc((size_t) n + 1);
 
-    int i = 0;
-    for (int y = 0; y < b->height; y++) {
-        for (int x = 0; x < b->width; x++) {
-            if (i == (b->height * b->width)) return;
-            char orig_face = b->set[y * b->width + x][random() % NUM_FACES];
-            short face = (unsigned char) orig_face;
-            if (face >= '0' && face <= '9')
-                face = MULTIFACE_DICE[face - '0'];
-            b->dice[i] = face;
-            b->dice_simple[i] = orig_face;
-            i++;
-        }
+    for (int i = 0; i < n; i++) {
+        const char orig_face = b->set[i][random() % NUM_FACES];
+        short face = (unsigned char) orig_face;
+        if (face >= '0' && face <= '9')
+            face = MULTIFACE_DICE[face - '0'];
+        b->dice[i] = face;
+        b->dice_simple[i] = orig_face;
     }
-    b->dice_simple[i] = '\0';
+    b->dice_simple[n] = '\0';
 }
 enum ADD_RESULT {
     ADD_ADDED,
@@ -377,7 +372,6 @@ static enum ADD_RESULT add_word(
     // hash-table slot, budget update.
     BoardWord *b_word = arena_alloc(&board->arena, sizeof(BoardWord));
     b_word->word = arena_strdup(&board->arena, word, length);
-    b_word->found = false;
     b_word->len = length;
 
     ht_commit(board, slot, b_word);
@@ -425,14 +419,21 @@ static bool find_words( // NOLINT(*-no-recursion)
     // If not a legal tile, can't make word here
     if (y < 0 || y >= board->height || x < 0 || x >= board->width) return true;
 
-    // Make a bitmask for this tile position
-    const int_least64_t mask = 0x1 << (y * board->width + x);
+    // Make a bitmask for this tile position. Cast 1 to the wider
+    // type *before* shifting — a shift on the 32-bit literal would
+    // be UB at any tile index ≥ 31 (i.e. anything on a 6×6 board).
+    const int_least64_t mask = ((int_least64_t) 1) << (y * board->width + x);
 
     // If we've already used this tile, can't make word here
     if (used & mask) return true;
 
-    // Find the DAWG-node for existing-DAWG-node plus this letter.
-    const short sought = toupper(board->dice[y * board->width + x]);
+    // Look up the DAWG node for "current prefix + this tile's letter".
+    // Dice characters and DAWG entries are both uppercase by
+    // construction (the dice-set tables ship uppercase, and multiface
+    // tiles are encoded as ('Q'<<8)|'U' etc.), so no toupper is
+    // needed. Words are stored uppercase here too; the Python wrapper
+    // does .lower() on the way out.
+    const short sought = board->dice[y * board->width + x];
 
     if (sought < 256) {
         while (i != 0 && DAWG_LETTER(dawg, i) != sought) i = DAWG_NEXT(dawg, i);
@@ -442,11 +443,11 @@ static bool find_words( // NOLINT(*-no-recursion)
 
         // Either this is a word or the stem of a word. So update our 'word' to
         // include this letter.
-        word[word_len++] = tolower((char) sought);
+        word[word_len++] = (char) sought;
     } else {
         // special tile, like QU
-        short t1 = sought >> 8;
-        short t2 = sought & 0xFF;
+        const short t1 = sought >> 8;
+        const short t2 = sought & 0xFF;
 
         while (i != 0 && DAWG_LETTER(dawg, i) != t1) i = DAWG_NEXT(dawg, i);
 
@@ -457,10 +458,8 @@ static bool find_words( // NOLINT(*-no-recursion)
         while (i != 0 && DAWG_LETTER(dawg, i) != t2) i = DAWG_NEXT(dawg, i);
         if (i == 0) return true;
 
-        // Either this is a word or the stem of a word. So update our 'word' to
-        // include this letter.
-        word[word_len++] = tolower((char) t1);
-        word[word_len++] = tolower((char) t2);
+        word[word_len++] = (char) t1;
+        word[word_len++] = (char) t2;
     }
 
     // Mark this tile as used
@@ -513,7 +512,10 @@ bool find_all_words(Board *b) {
     b->longest = 0;
     b->score = 0;
 
-    char word[MAX_WORD_LEN + 1];
+    // +2 (not +1) so the null terminator at word[word_len] always
+    // fits: a multiface tile lands at indices word_len, word_len+1,
+    // and the EOW write follows at word_len+2.
+    char word[MAX_WORD_LEN + 2];
 
     for (int y = 0; y < b->height; y++) {
         for (int x = 0; x < b->width; x++) {
