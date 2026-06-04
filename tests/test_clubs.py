@@ -218,6 +218,45 @@ def test_me_does_not_include_others_clubs(
     assert resp.json()["clubs"] == []
 
 
+def test_get_club_open_to_any_authed_user(
+    client: TestClient, db: sqlite3.Connection
+) -> None:
+    """``GET /api/clubs/:id`` returns the summary for any authed
+    user (member or not). The "not in this club" page on the
+    client depends on the non-member case working."""
+    _seed_users(db, client, ["leah"])
+    _register(client, "moth")  # moth logged in
+    club_id = client.post(
+        "/api/clubs", json={"name": "moth + leah", "member_handles": ["leah"]}
+    ).json()["id"]
+    _logout(client)
+
+    # joel is authed but not in the club.
+    _register(client, "joel")
+    resp = client.get(f"/api/clubs/{club_id}")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["name"] == "moth + leah"
+    assert sorted(body["member_handles"]) == ["leah", "moth"]
+
+
+def test_get_club_404_for_missing(
+    client: TestClient, db: sqlite3.Connection
+) -> None:
+    """Unknown club id → 404."""
+    _seed_invite(db)
+    _register(client, "joel")
+    resp = client.get("/api/clubs/99999")
+    assert resp.status_code == 404
+
+
+def test_get_club_401_for_anon(client: TestClient) -> None:
+    """Anonymous request → 401, even though the endpoint is open
+    to non-members. Auth still required."""
+    resp = client.get("/api/clubs/1")
+    assert resp.status_code == 401
+
+
 def test_me_sort_order(client: TestClient, db: sqlite3.Connection) -> None:
     """Clubs sort by last_played_at desc nulls last, then newest id first."""
     _seed_users(db, client, ["moth", "leah", "kate"])

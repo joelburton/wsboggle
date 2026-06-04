@@ -69,6 +69,7 @@ export const api = {
 
   // Clubs
   createClub:    (body: CreateClubRequest) => post<ClubSummary>("/api/clubs", body),
+  getClub:       (clubId: number) => get<ClubSummary>(`/api/clubs/${clubId}`),
   listClubGames: (clubId: number) =>
     get<ClubGameSummary[]>(`/api/clubs/${clubId}/games`),
 

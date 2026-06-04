@@ -33,6 +33,7 @@ import { Link } from "../routing";
 import type {
   ChatMessage,
   ClubGameSummary,
+  ClubSummary,
   GameConfig,
   GameResult,
   GameSnapshot,
@@ -165,6 +166,7 @@ export function ClubPage({ clubId, me }: Props) {
   if (state.closeCode !== null && !state.hydrated) {
     return (
       <ClubError
+        clubId={clubId}
         code={state.closeCode}
         myHandle={me.user.handle}
       />
@@ -683,14 +685,57 @@ function InlineChatPanel({
 
 // --- Error pane ---------------------------------------------------------
 
-function ClubError({ code }: { code: number; myHandle: string }) {
+type ClubErrorProps = {
+  clubId: number;
+  code: number;
+  myHandle: string;
+};
+
+function ClubError({ clubId, code, myHandle }: ClubErrorProps) {
+  // For 4403 (not a member), pull the public summary so we can
+  // show the actual club name + member list — the visitor needs to
+  // know *who* to ask for an invite. 4404 doesn't need a fetch
+  // (there's nothing to display). 4401 means we already lost our
+  // session, so don't bother either.
+  const [summary, setSummary] = useState<ClubSummary | null>(null);
+  useEffect(() => {
+    if (code !== 4403) return;
+    let cancelled = false;
+    api.getClub(clubId)
+      .then((s) => { if (!cancelled) setSummary(s); })
+      .catch(() => { /* fall back to the generic message */ });
+    return () => { cancelled = true; };
+  }, [code, clubId]);
+
+  if (code === 4403) {
+    return (
+      <main style={{ padding: "2rem", maxWidth: 480, margin: "0 auto" }}>
+        <h1>{summary ? `Not in ${summary.name}` : "Not in this club"}</h1>
+        <p>
+          You're signed in as <strong>@{myHandle}</strong>, but you're
+          not a member of this club.
+        </p>
+        {summary && summary.member_handles.length > 0 && (
+          <>
+            <p>Ask one of these members to add you:</p>
+            <ul>
+              {summary.member_handles.map((h) => (
+                <li key={h} style={{ color: colorForHandle(h) }}>
+                  @{h}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+        <p><Link to="/">← Home</Link></p>
+      </main>
+    );
+  }
+
   let message: string;
   switch (code) {
     case 4401:
       message = "Your session expired. Sign in again.";
-      break;
-    case 4403:
-      message = "You're not a member of this club.";
       break;
     case 4404:
       message = "This club doesn't exist.";

@@ -86,6 +86,27 @@ def create_club(
     return summary
 
 
+@router.get("/{club_id}", response_model=ClubSummary)
+def get_club(
+    club_id: int,
+    db: sqlite3.Connection = Depends(get_db),
+    _user: auth.User = Depends(require_user),
+) -> ClubSummary:
+    """Fetch one club's summary.
+
+    Open to **any authed user**, not just members — the client uses
+    this on a 4403 WS close to render a friendly "you're not in
+    <name>" page that lists the actual members so the visitor knows
+    who to ask for an invite. The trusted-friends model makes that
+    disclosure fine (and tboggle / crossplay both already treat
+    handles as public).
+    """
+    summary = clubs.get_club_summary(db, club_id)
+    if summary is None:
+        raise HTTPException(404, "no such club")
+    return summary
+
+
 @router.get("/{club_id}/games", response_model=list[ClubGameSummary])
 def list_club_games(
     club_id: int,
