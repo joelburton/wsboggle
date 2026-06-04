@@ -44,6 +44,7 @@ import type {
 import { Board } from "./Board";
 import { BoardStats } from "./BoardStats";
 import { ChatPanel as FloatingChatPanel, ChatIndicator } from "./ChatPanel";
+import { GameConstraints, EMPTY_CONSTRAINTS, type Constraints } from "./GameConstraints";
 import { GameResultPanel } from "./GameResultPanel";
 import { Timer } from "./Timer";
 import { WordEntry } from "./WordEntry";
@@ -446,6 +447,7 @@ function configToModeId(c: GameConfig | null): string {
 function buildConfig(
   diceSet: string,
   mode: TimerMode,
+  constraints: Constraints,
   base: GameConfig | null,
 ): GameConfig {
   return {
@@ -456,12 +458,26 @@ function buildConfig(
     dupes_cancel: base?.dupes_cancel ?? true,
     timer_seconds: mode.seconds,
     timer_direction: mode.direction,
-    min_words: base?.min_words ?? null,
-    max_words: base?.max_words ?? null,
-    min_score: base?.min_score ?? null,
-    max_score: base?.max_score ?? null,
-    min_longest: base?.min_longest ?? null,
-    max_longest: base?.max_longest ?? null,
+    min_words: constraints.min_words,
+    max_words: constraints.max_words,
+    min_score: constraints.min_score,
+    max_score: constraints.max_score,
+    min_longest: constraints.min_longest,
+    max_longest: constraints.max_longest,
+  };
+}
+
+/** Pull the six constraint values out of an existing config so the
+ *  dialog can pre-fill from last_config. Carries nulls through. */
+function constraintsFromConfig(c: GameConfig | null): Constraints {
+  if (c === null) return EMPTY_CONSTRAINTS;
+  return {
+    min_words: c.min_words,
+    max_words: c.max_words,
+    min_score: c.min_score,
+    max_score: c.max_score,
+    min_longest: c.min_longest,
+    max_longest: c.max_longest,
   };
 }
 
@@ -497,6 +513,9 @@ type NewGameDialogProps = {
 function NewGameDialog({ initial, onCancel, onStart }: NewGameDialogProps) {
   const [diceSet, setDiceSet] = useState(initial?.dice_set ?? "4");
   const [modeId, setModeId] = useState(configToModeId(initial));
+  const [constraints, setConstraints] = useState<Constraints>(
+    constraintsFromConfig(initial),
+  );
 
   useEffect(() => {
     function onKey(e: globalThis.KeyboardEvent) {
@@ -512,7 +531,7 @@ function NewGameDialog({ initial, onCancel, onStart }: NewGameDialogProps) {
   function submit(e: FormEvent) {
     e.preventDefault();
     const mode = TIMER_MODES.find((m) => m.id === modeId) ?? TIMER_MODES[3];
-    onStart(buildConfig(diceSet, mode, initial));
+    onStart(buildConfig(diceSet, mode, constraints, initial));
   }
 
   return (
@@ -543,6 +562,7 @@ function NewGameDialog({ initial, onCancel, onStart }: NewGameDialogProps) {
               ))}
             </select>
           </label>
+          <GameConstraints value={constraints} onChange={setConstraints} />
           <div className={styles.dialogActions}>
             <button type="button" className="secondary" onClick={onCancel}>
               Cancel

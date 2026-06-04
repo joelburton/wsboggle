@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { api, ApiError } from "../api";
 import { Link, navigate } from "../routing";
 import type { GameConfig } from "../shared";
+import { GameConstraints, EMPTY_CONSTRAINTS, type Constraints } from "./GameConstraints";
 import styles from "./AuthForm.module.css";
 
 // All eight dice sets, in display order. Mirrors the registry in
@@ -43,11 +44,15 @@ const TIMER_MODES: readonly TimerMode[] = [
   { id: "untimed", label: "Untimed",     seconds: null, direction: "down" },
 ];
 
-/** Build a complete GameConfig from the two knobs we expose, filling
+/** Build a complete GameConfig from the knobs we expose, filling
  *  in the same defaults the server would. Sending an explicit full
  *  shape (rather than a partial) keeps the wire payload obvious from
  *  the client side. */
-function buildConfig(diceSet: string, mode: TimerMode): GameConfig {
+function buildConfig(
+  diceSet: string,
+  mode: TimerMode,
+  constraints: Constraints,
+): GameConfig {
   return {
     dice_set: diceSet,
     scoring_ladder: "basic",
@@ -56,18 +61,19 @@ function buildConfig(diceSet: string, mode: TimerMode): GameConfig {
     dupes_cancel: true,
     timer_seconds: mode.seconds,
     timer_direction: mode.direction,
-    min_words: null,
-    max_words: null,
-    min_score: null,
-    max_score: null,
-    min_longest: null,
-    max_longest: null,
+    min_words: constraints.min_words,
+    max_words: constraints.max_words,
+    min_score: constraints.min_score,
+    max_score: constraints.max_score,
+    min_longest: constraints.min_longest,
+    max_longest: constraints.max_longest,
   };
 }
 
 export function NewSoloGamePage() {
   const [diceSet, setDiceSet] = useState("4");
   const [modeId, setModeId] = useState("180");
+  const [constraints, setConstraints] = useState<Constraints>(EMPTY_CONSTRAINTS);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -77,7 +83,7 @@ export function NewSoloGamePage() {
     setPending(true);
     try {
       const mode = TIMER_MODES.find((m) => m.id === modeId) ?? TIMER_MODES[3];
-      const snap = await api.startSolo(buildConfig(diceSet, mode));
+      const snap = await api.startSolo(buildConfig(diceSet, mode, constraints));
       navigate(`/solo/${snap.game_id}`);
     } catch (err) {
       if (err instanceof ApiError) setError(err.detail);
@@ -112,6 +118,8 @@ export function NewSoloGamePage() {
             ))}
           </select>
         </label>
+
+        <GameConstraints value={constraints} onChange={setConstraints} />
 
         <div className={styles.actions}>
           <Link to="/" className={styles.altLink}>← Home</Link>

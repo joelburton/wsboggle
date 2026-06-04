@@ -1,0 +1,61 @@
+.wrapper {
+  border-top: 1px solid #e5e7eb;
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+}
+
+.header {
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: 0.9rem;
+  color: #374151;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0.2rem 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.disclosure {
+  display: inline-block;
+  width: 1em;
+  color: #6b7280;
+}
+
+.active {
+  margin-left: 0.4rem;
+  font-size: 0.75rem;
+  color: #2563eb;
+  background: #dbeafe;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: auto 1fr 1fr;
+  gap: 0.35rem 0.5rem;
+  margin-top: 0.4rem;
+  font-size: 0.9rem;
+}
+
+.colHead {
+  font-size: 0.75rem;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-align: center;
+}
+
+.label {
+  color: #374151;
+  align-self: center;
+}
+
+.numInput {
+  width: 100%;
+  text-align: right;
+}

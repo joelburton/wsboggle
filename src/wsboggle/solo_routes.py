@@ -58,9 +58,15 @@ def start_solo_game(
     except games.GameConfigError as e:
         raise HTTPException(400, str(e)) from e
 
-    state = games.start_game(
-        db, club_id=None, created_by=user.id, config=body.config
-    )
+    try:
+        state = games.start_game(
+            db, club_id=None, created_by=user.id, config=body.config
+        )
+    except RuntimeError as e:
+        # libwords gives up after max_tries when the constraints are
+        # too tight to satisfy on the given dice set. Surface as 400
+        # rather than 500 so the UI can tell the player to relax them.
+        raise HTTPException(400, str(e)) from e
     return games.to_snapshot(db, state, viewer_user_id=user.id)
 
 

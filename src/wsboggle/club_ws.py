@@ -441,12 +441,18 @@ async def _handle_new_game(
             await _send(ws, SFeedback(text=str(e), level="warn"))
             return
 
-        state = games.start_game(
-            db,
-            club_id=club_id,
-            created_by=user.id,
-            config=msg.config,
-        )
+        try:
+            state = games.start_game(
+                db,
+                club_id=club_id,
+                created_by=user.id,
+                config=msg.config,
+            )
+        except RuntimeError as e:
+            # libwords couldn't satisfy the "good board" constraints
+            # within max_tries. Tell the user, don't crash.
+            await _send(ws, SFeedback(text=str(e), level="warn"))
+            return
 
         # Schedule the server-side timer before announcing the
         # game; in the (impossible-without-bugs) case that the timer
