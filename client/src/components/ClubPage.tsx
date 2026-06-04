@@ -41,7 +41,7 @@ import type {
   MeResponse,
 } from "../shared";
 import { Board } from "./Board";
-import { ChatPanel as FloatingChatPanel, ChatReopenTab } from "./ChatPanel";
+import { ChatPanel as FloatingChatPanel, ChatIndicator } from "./ChatPanel";
 import { GameResultPanel } from "./GameResultPanel";
 import { Timer } from "./Timer";
 import { WordEntry } from "./WordEntry";
@@ -177,7 +177,14 @@ export function ClubPage({ clubId, me }: Props) {
   // --- Main view ---------------------------------------------------------
 
   const allOnline = state.members.every((m) => m.online);
-  const unreadCount = state.chat.filter((l) => l.id > seenChatId).length;
+  const unreadMessages = state.chat.filter((l) => l.id > seenChatId);
+  const unreadCount = unreadMessages.length;
+  // Most-recent unread sender's color drives the indicator's
+  // background, telegraphing "who do you owe a reply to."
+  const unreadColor =
+    unreadCount > 0
+      ? colorForHandle(unreadMessages[unreadMessages.length - 1].handle)
+      : null;
 
   return (
     <div className={styles.wrapper}>
@@ -248,8 +255,9 @@ export function ClubPage({ clubId, me }: Props) {
         />
       )}
       {chatLayout === "floating" && !chatOpen && (
-        <ChatReopenTab
+        <ChatIndicator
           unreadCount={unreadCount}
+          unreadColor={unreadColor}
           onOpen={() => setChatOpen(true)}
         />
       )}

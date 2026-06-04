@@ -107,33 +107,46 @@
   cursor: pointer;
 }
 
-/* The reopen tab when the panel is closed. */
+/* Floating round indicator that reopens the chat. Style ported
+ * from crossplay's `ChatIndicator`. Background color is set inline
+ * — subtle gray when nothing's unread, the most recent unread
+ * sender's player color otherwise. */
 
-.reopen {
+.indicator {
   position: fixed;
   right: 16px;
   bottom: 16px;
-  background: #1f2937;
-  color: white;
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 50%;
   border: 0;
-  border-radius: 999px;
-  padding: 0.5rem 0.9rem;
-  font-size: 0.9rem;
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  transition: transform 0.1s;
+  padding: 0;
   z-index: 49;
 }
 
-.reopen:hover { background: #111827; }
+.indicator:hover {
+  transform: scale(1.05);
+}
 
-.reopenBadge {
-  display: inline-block;
-  background: #ef4444;
-  color: white;
-  border-radius: 999px;
-  min-width: 1.1rem;
-  text-align: center;
-  font-size: 0.75rem;
-  margin-left: 0.4rem;
+.badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 1.2rem;
+  height: 1.2rem;
   padding: 0 0.35rem;
+  border-radius: 999px;
+  background: #d33;
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.2rem;
+  text-align: center;
+  box-shadow: 0 0 0 2px #fff;
 }

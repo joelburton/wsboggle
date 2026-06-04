@@ -194,23 +194,48 @@ export function ChatPanel({
   );
 }
 
-// --- Closed-state reopen tab --------------------------------------------
+// --- Closed-state indicator (the reopen affordance) ---------------------
 
-type ReopenProps = {
+type IndicatorProps = {
   unreadCount: number;
+  /** Player color of the most recent unread message, used as the
+   *  button's background to telegraph *who* you owe a reply.
+   *  ``null`` when there's nothing unread; the button stays a
+   *  subtle gray in that case. */
+  unreadColor: string | null;
   onOpen: () => void;
 };
 
-/** Bottom-right "💬 Chat" pill shown when the floating panel is
- *  closed. An unread badge appears when chat lines have arrived
- *  since the last open. Pressing "/" anywhere outside an input also
- *  opens the panel (see :class:`ClubPage`). */
-export function ChatReopenTab({ unreadCount, onOpen }: ReopenProps) {
+const SUBTLE = "#d0d0d0";
+
+/** Circular floating button in the bottom-right that re-opens the
+ *  floating chat. Ported from crossplay's :class:`ChatIndicator`:
+ *  a subtle-gray speech-bubble when there's nothing new, the most
+ *  recent unread sender's color (with a red count badge) when
+ *  there is. Pressing "/" anywhere outside an input also opens the
+ *  panel (see :class:`ClubPage`). */
+export function ChatIndicator({ unreadCount, unreadColor, onOpen }: IndicatorProps) {
+  const showColor = unreadCount > 0 && unreadColor ? unreadColor : SUBTLE;
+  const ariaLabel =
+    unreadCount > 0 ? `Open chat (${unreadCount} unread)` : "Open chat";
   return (
-    <button type="button" className={styles.reopen} onClick={onOpen}>
-      💬 Chat
+    <button
+      type="button"
+      className={styles.indicator}
+      style={{ background: showColor }}
+      onClick={onOpen}
+      aria-label={ariaLabel}
+    >
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+        <path
+          d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-9l-5 4v-4H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"
+          fill="#fff"
+        />
+      </svg>
       {unreadCount > 0 && (
-        <span className={styles.reopenBadge}>{unreadCount}</span>
+        <span className={styles.badge}>
+          {unreadCount > 99 ? "99+" : unreadCount}
+        </span>
       )}
     </button>
   );
