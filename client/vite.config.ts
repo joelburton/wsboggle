@@ -11,6 +11,17 @@ const API_PORT = process.env.API_PORT ?? "3001";
 
 export default defineConfig({
   plugins: [react()],
+  // `react-draggable@4.6+` (transitive via `react-rnd`) references
+  // `process.env.DRAGGABLE_DEBUG` directly with no guard, which
+  // explodes in the browser as `ReferenceError: process is not
+  // defined`. Vite does literal-token replacement, so substituting
+  // the whole `process.env` access with `{}` turns the dead-debug
+  // check into `({}).DRAGGABLE_DEBUG === undefined`. (4.5.0 had
+  // the guard; 4.6.0 dropped it. We can't pin without overrides,
+  // which is heavier than the one-line shim.)
+  define: {
+    "process.env": "{}",
+  },
   server: {
     port: Number(process.env.PORT ?? 5173),
     proxy: {
