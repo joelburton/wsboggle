@@ -24,6 +24,10 @@ export default defineConfig({
   },
   server: {
     port: Number(process.env.PORT ?? 5173),
+    // Localhost is always allowed; this lets Cloudflare quick-tunnels
+    // (`https://*.trycloudflare.com`) reach the dev server too. Same
+    // entry crossplay uses.
+    allowedHosts: [".trycloudflare.com"],
     proxy: {
       "/api": { target: `http://127.0.0.1:${API_PORT}` },
       "/ws":  { target: `ws://127.0.0.1:${API_PORT}`, ws: true },
