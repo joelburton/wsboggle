@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+import { api } from "../api";
 import { navigate } from "../routing";
 import type { GameResult } from "../shared";
 import { Board } from "./Board";
@@ -20,6 +22,12 @@ type Props = {
  *  the creator. Multiplayer puts the viewer's block first and
  *  shows every other player's list below.
  *
+ *  Every word in the panel (each player's list + missed list) is a
+ *  click target that pops a definition next to it. Definitions are
+ *  cached per component-instance so re-clicking is instant; we lean
+ *  on `api.define` to do the dictionary lookup. Click outside or
+ *  press Esc to dismiss; clicking the same word toggles it closed.
+ *
  *  The board is shown compact at the top so you can verify the path
  *  of any word — particularly useful when scanning the "missed" list
  *  to confirm a word you didn't see was actually reachable. */
@@ -35,8 +43,46 @@ export function GameResultPanel({ result, viewerUserId }: Props) {
     }
   }
 
+  // --- Definition lookup -----------------------------------------------
+
+  // Currently-selected word (the popover anchors here). Lowercase
+  // since that's the canonical form on the server.
+  const [selected, setSelected] = useState<string | null>(null);
+  // Per-word lookup state. ``undefined`` = never asked; ``"loading"``
+  // = request in flight; ``string`` = found; ``null`` = not in dict.
+  const [defs, setDefs] = useState<Record<string, "loading" | string | null>>({});
+
+  function onWordClick(rawWord: string) {
+    const word = rawWord.toLowerCase();
+    if (selected === word) {
+      setSelected(null);
+      return;
+    }
+    setSelected(word);
+    if (defs[word] === undefined) {
+      setDefs((d) => ({ ...d, [word]: "loading" }));
+      api.define(word).then(
+        (res) => setDefs((d) => ({ ...d, [word]: res.definition })),
+        () => setDefs((d) => ({ ...d, [word]: null })),
+      );
+    }
+  }
+
+  // Esc clears the popover, regardless of focus.
+  useEffect(() => {
+    if (selected === null) return;
+    function onKey(e: globalThis.KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSelected(null);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected]);
+
   return (
-    <div className={styles.panel}>
+    <div className={styles.panel} onClick={() => setSelected(null)}>
       <h2>Game ended</h2>
 
       <div className={styles.boardSlot}>
@@ -73,15 +119,15 @@ export function GameResultPanel({ result, viewerUserId }: Props) {
             ) : (
               <div className={styles.wordGrid}>
                 {p.words.map((w, i) => (
-                  <span
+                  <WordChip
                     key={i}
-                    style={{
-                      color: w.shared_with.length > 0 ? "#9ca3af" : "#1f2937",
-                    }}
-                    title={w.shared_with.length > 0 ? "shared with another player — 0 pts" : ""}
-                  >
-                    {w.word} <em style={{ color: "#6b7280" }}>+{w.points}</em>
-                  </span>
+                    word={w.word}
+                    points={w.points}
+                    shared={w.shared_with.length > 0}
+                    selected={selected === w.word.toLowerCase()}
+                    def={defs[w.word.toLowerCase()]}
+                    onClick={onWordClick}
+                  />
                 ))}
               </div>
             )}
@@ -98,9 +144,14 @@ export function GameResultPanel({ result, viewerUserId }: Props) {
         ) : (
           <div className={styles.wordGrid}>
             {result.missed_words.map((m, i) => (
-              <span key={i} className={styles.missed}>
-                {m.word}
-              </span>
+              <WordChip
+                key={i}
+                word={m.word}
+                missed
+                selected={selected === m.word.toLowerCase()}
+                def={defs[m.word.toLowerCase()]}
+                onClick={onWordClick}
+              />
             ))}
           </div>
         )}
@@ -112,6 +163,78 @@ export function GameResultPanel({ result, viewerUserId }: Props) {
           Home
         </button>
       </div>
+    </div>
+  );
+}
+
+// --- Word chip with attached definition popover --------------------------
+
+type WordChipProps = {
+  word: string;
+  /** Score for this word in this player's list. Omitted for missed
+   *  words (no per-player score there). */
+  points?: number;
+  /** Shared with another player (competitive dupes-cancel) — render
+   *  the word dim and skip the "+N" so the zero score is obvious. */
+  shared?: boolean;
+  /** A word in the "missed" section: muted color, no points. */
+  missed?: boolean;
+  selected: boolean;
+  def: "loading" | string | null | undefined;
+  onClick: (word: string) => void;
+};
+
+function WordChip({
+  word, points, shared, missed, selected, def, onClick,
+}: WordChipProps) {
+  const baseColor = missed ? "#6b7280" : shared ? "#9ca3af" : "#1f2937";
+  return (
+    <span
+      className={styles.wordWrap}
+      onClick={(e) => e.stopPropagation()}
+      /* Stops the click from bubbling to the panel-level "close on
+         outside click" handler — we want clicking another word to
+         open *that* word's def, not close the current one before
+         opening. */
+    >
+      <button
+        type="button"
+        className={`${styles.wordBtn} ${selected ? styles.wordBtnSelected : ""}`}
+        style={{ color: baseColor }}
+        onClick={() => onClick(word)}
+        title={shared ? "shared with another player — 0 pts" : undefined}
+      >
+        {word}
+        {points !== undefined && !shared && (
+          <em className={styles.wordPoints}>+{points}</em>
+        )}
+      </button>
+      {selected && (
+        <DefinitionPopover word={word} def={def} />
+      )}
+    </span>
+  );
+}
+
+function DefinitionPopover({
+  word,
+  def,
+}: {
+  word: string;
+  def: "loading" | string | null | undefined;
+}) {
+  let body: React.ReactNode;
+  if (def === undefined || def === "loading") {
+    body = <span className={styles.popoverMuted}>looking up…</span>;
+  } else if (def === null) {
+    body = <span className={styles.popoverMuted}>(no definition)</span>;
+  } else {
+    body = def;
+  }
+  return (
+    <div className={styles.popover} role="tooltip">
+      <div className={styles.popoverHead}>{word.toUpperCase()}</div>
+      <div className={styles.popoverBody}>{body}</div>
     </div>
   );
 }
