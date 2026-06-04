@@ -28,6 +28,13 @@
   }
 }
 
+/* No inline chat column — used when the floating chat is in play
+ * (game / result views). Lets the board / result panel use the
+ * full content width. */
+.layoutFull {
+  display: block;
+}
+
 .section {
   background: white;
   border: 1px solid #e5e7eb;

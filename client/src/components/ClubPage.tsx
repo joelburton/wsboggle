@@ -1,25 +1,37 @@
 /**
  * The club page (`/c/:id`).
  *
- * Owns one club WebSocket via :func:`useClubSocket` and renders the
- * lobby view: members + presence dots, inline chat panel, recent
- * games (REST), and a placeholder "New game" button.
+ * Owns one club WebSocket via :func:`useClubSocket` and renders one
+ * of three views off the socket state: the lobby (members, new-game
+ * form, recent games), the in-progress game (board + entry + word
+ * list), or the end-of-game result panel.
  *
- * Game flow over the WS isn't wired yet — the button explains that
- * and disabled-state covers the "not all members present" rule
- * we'll need anyway.
+ * Chat layout follows the view:
  *
- * The draggable chat popup that crossplay uses is deferred — we
- * start with an inline panel beside the member list. CLAUDE.md
- * tags this as a port target (`useDraggablePanel`); it'll come
- * with the rest of the chat polish.
+ * - Lobby: inline chat in the right column. There's room for it and
+ *   chat is part of the "what's everyone up to" surface.
+ * - Game / result: floating draggable chat (port of crossplay's
+ *   `ChatPanel`). The board needs the page width during play, and
+ *   chat shouldn't compete for it.
+ *
+ * The floating panel adds crossplay's behaviors: open/close,
+ * persistent rect, `/` opens (or focuses if open), Esc closes,
+ * unread badge on the reopen tab, and `!`-prefixed messages
+ * force-open the panel on the receiver side.
  */
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
 import { api, ApiError } from "../api";
 import { useClubSocket } from "../clubSocket";
 import { Link } from "../routing";
 import type {
+  ChatMessage,
   ClubGameSummary,
   GameConfig,
   GameResult,
@@ -29,17 +41,21 @@ import type {
   MeResponse,
 } from "../shared";
 import { Board } from "./Board";
+import { ChatPanel as FloatingChatPanel, ChatReopenTab } from "./ChatPanel";
 import { GameResultPanel } from "./GameResultPanel";
 import { Timer } from "./Timer";
 import { WordEntry } from "./WordEntry";
 import { WordList } from "./WordList";
 import { colorForHandle, OFFLINE_COLOR } from "../colors";
+import { linkify } from "../linkify";
 import styles from "./ClubPage.module.css";
 
 type Props = {
   clubId: number;
   me: MeResponse;
 };
+
+type Feedback = { id: number; text: string; level: "info" | "warn" | "error" };
 
 export function ClubPage({ clubId, me }: Props) {
   const {
@@ -52,6 +68,15 @@ export function ClubPage({ clubId, me }: Props) {
   } = useClubSocket(clubId);
   const [history, setHistory] = useState<ClubGameSummary[] | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
+
+  // Floating chat state. Only meaningful when the view is "playing"
+  // or "result" (in lobby the chat is inline and always visible).
+  const [chatOpen, setChatOpen] = useState(false);
+  // Last chat id the user has "seen" — anything beyond this is
+  // counted as unread on the reopen badge. Bumped to the latest id
+  // whenever the panel is open and a new line lands, and on open.
+  const [seenChatId, setSeenChatId] = useState(0);
+  const floatingInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Recent games list is REST-fetched (the WS doesn't carry past-
   // game history). Reload after gameEnded so a fresh result shows
@@ -68,6 +93,72 @@ export function ClubPage({ clubId, me }: Props) {
     return () => { cancelled = true; };
   }, [clubId, state.gameResult]);
 
+  // Pick the view + whether chat is inline or floating off the
+  // socket state.
+  const mode: "lobby" | "playing" | "result" =
+    state.gameResult !== null ? "result"
+      : state.currentGame !== null ? "playing"
+      : "lobby";
+  const chatLayout: "inline" | "floating" = mode === "lobby" ? "inline" : "floating";
+
+  // Keep `seenChatId` glued to the latest while the panel is open
+  // (or chat is inline) so unread-count is always 0 in that case.
+  useEffect(() => {
+    if (chatLayout === "inline" || chatOpen) {
+      const latest = state.chat.length > 0 ? state.chat[state.chat.length - 1].id : 0;
+      setSeenChatId((cur) => (latest > cur ? latest : cur));
+    }
+  }, [chatLayout, chatOpen, state.chat]);
+
+  // `!`-prefixed messages force-open the floating chat on the
+  // recipient side — the "hey look at this!" mechanic. Tracked via
+  // a ref so the effect can compare against the most recent line
+  // it processed without depending on every chat update.
+  const lastImportantSeenRef = useRef(0);
+  useEffect(() => {
+    if (chatLayout !== "floating") return;
+    for (const line of state.chat) {
+      if (line.id <= lastImportantSeenRef.current) continue;
+      lastImportantSeenRef.current = line.id;
+      if (line.text.startsWith("!") && line.handle !== me.user.handle) {
+        setChatOpen(true);
+      }
+    }
+  }, [state.chat, chatLayout, me.user.handle]);
+
+  // `/` keystroke: focus the chat input from anywhere outside
+  // another input/textarea. In floating mode it opens the panel
+  // first if closed.
+  useEffect(() => {
+    function onKey(e: globalThis.KeyboardEvent) {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (e.key === "/") {
+        e.preventDefault();
+        if (chatLayout === "floating") {
+          if (!chatOpen) setChatOpen(true);
+          // Focus runs once the input mounts; the effect inside
+          // FloatingChatPanel handles initial-focus, but for an
+          // already-open panel we focus directly here.
+          setTimeout(() => floatingInputRef.current?.focus(), 0);
+        } else {
+          // Inline chat is always visible; just focus its input.
+          const el = document.querySelector<HTMLInputElement>(
+            `.${styles.chat} input`,
+          );
+          el?.focus();
+        }
+      } else if (e.key === "Escape" && chatLayout === "floating" && chatOpen) {
+        e.preventDefault();
+        setChatOpen(false);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [chatLayout, chatOpen]);
+
   // --- Loading / closed states -------------------------------------------
 
   if (state.closeCode !== null && !state.hydrated) {
@@ -82,9 +173,10 @@ export function ClubPage({ clubId, me }: Props) {
     return <main style={{ padding: "2rem" }}>Loading…</main>;
   }
 
-  // --- Main view ----------------------------------------------------------
+  // --- Main view ---------------------------------------------------------
 
   const allOnline = state.members.every((m) => m.online);
+  const unreadCount = state.chat.filter((l) => l.id > seenChatId).length;
 
   return (
     <div className={styles.wrapper}>
@@ -99,21 +191,23 @@ export function ClubPage({ clubId, me }: Props) {
         </div>
       )}
 
-      <div className={styles.layout}>
+      <div className={chatLayout === "inline" ? styles.layout : styles.layoutFull}>
         <div>
-          {state.gameResult !== null ? (
+          {mode === "result" && state.gameResult !== null && (
             <ResultView
               result={state.gameResult}
               viewerUserId={me.user.id}
               onDismiss={clearResult}
             />
-          ) : state.currentGame !== null ? (
+          )}
+          {mode === "playing" && state.currentGame !== null && (
             <PlayView
               snapshot={state.currentGame}
               guesses={state.yourGuesses}
               onGuess={sendGuess}
             />
-          ) : (
+          )}
+          {mode === "lobby" && (
             <LobbyView
               clubId={clubId}
               me={me}
@@ -127,14 +221,35 @@ export function ClubPage({ clubId, me }: Props) {
           )}
         </div>
 
-        <ChatPanel
-          chat={state.chat}
+        {chatLayout === "inline" && (
+          <InlineChatPanel
+            chat={state.chat}
+            feedback={state.feedback}
+            onSend={sendChat}
+            onDismissFeedback={dismissFeedback}
+            disabled={!state.connected}
+          />
+        )}
+      </div>
+
+      {chatLayout === "floating" && chatOpen && (
+        <FloatingChatPanel
+          myHandle={me.user.handle}
+          messages={state.chat}
           feedback={state.feedback}
           onSend={sendChat}
+          onClose={() => setChatOpen(false)}
           onDismissFeedback={dismissFeedback}
           disabled={!state.connected}
+          inputRef={floatingInputRef}
         />
-      </div>
+      )}
+      {chatLayout === "floating" && !chatOpen && (
+        <ChatReopenTab
+          unreadCount={unreadCount}
+          onOpen={() => setChatOpen(true)}
+        />
+      )}
     </div>
   );
 }
@@ -361,17 +476,26 @@ function ResultView({ result, viewerUserId, onDismiss }: ResultProps) {
   );
 }
 
-// --- Chat ---------------------------------------------------------------
+// --- Inline chat panel (lobby only) -------------------------------------
 
-type ChatPanelProps = {
-  chat: { id: number; handle: string; text: string; ts: string }[];
-  feedback: { id: number; text: string; level: string }[];
+type InlineChatProps = {
+  chat: ChatMessage[];
+  feedback: Feedback[];
   onSend: (text: string) => void;
   onDismissFeedback: (id: number) => void;
   disabled: boolean;
 };
 
-function ChatPanel({ chat, feedback, onSend, onDismissFeedback, disabled }: ChatPanelProps) {
+/** The chat panel rendered in the lobby's right column. Same lines,
+ *  same `!`-bold and URL-linkify behavior as the floating panel —
+ *  only the container differs (inline vs draggable). */
+function InlineChatPanel({
+  chat,
+  feedback,
+  onSend,
+  onDismissFeedback,
+  disabled,
+}: InlineChatProps) {
   const [draft, setDraft] = useState("");
   const logRef = useRef<HTMLDivElement>(null);
 
@@ -388,6 +512,15 @@ function ChatPanel({ chat, feedback, onSend, onDismissFeedback, disabled }: Chat
     if (!draft.trim()) return;
     onSend(draft);
     setDraft("");
+  }
+
+  function onInputKey(e: KeyboardEvent<HTMLInputElement>) {
+    // Swallow `/` when the user is typing it into the chat input —
+    // otherwise the page-level handler would refocus the same
+    // input mid-keystroke. Browsers do call onKeyDown before the
+    // global one, but the page handler ignores keystrokes whose
+    // target is an input, so this is mostly a doc comment.
+    if (e.key === "Escape") (e.target as HTMLInputElement).blur();
   }
 
   return (
@@ -407,17 +540,23 @@ function ChatPanel({ chat, feedback, onSend, onDismissFeedback, disabled }: Chat
         {chat.length === 0 ? (
           <p className={styles.empty}>No messages yet.</p>
         ) : (
-          chat.map((line) => (
-            <div key={line.id} className={styles.chatLine}>
-              <span
-                className={styles.chatHandle}
-                style={{ color: colorForHandle(line.handle) }}
-              >
-                {line.handle}
-              </span>
-              {line.text}
-            </div>
-          ))
+          chat.map((line) => {
+            const important = line.text.startsWith("!");
+            const body = important ? line.text.slice(1) : line.text;
+            return (
+              <div key={line.id} className={styles.chatLine}>
+                <span
+                  className={styles.chatHandle}
+                  style={{ color: colorForHandle(line.handle) }}
+                >
+                  {line.handle}
+                </span>
+                <span style={{ fontWeight: important ? 700 : 400 }}>
+                  {linkify(body)}
+                </span>
+              </div>
+            );
+          })
         )}
       </div>
       <form className={styles.chatInputRow} onSubmit={submit}>
@@ -425,6 +564,7 @@ function ChatPanel({ chat, feedback, onSend, onDismissFeedback, disabled }: Chat
           type="text"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={onInputKey}
           placeholder={disabled ? "(disconnected)" : "Say something…"}
           disabled={disabled}
           maxLength={2000}
