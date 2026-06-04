@@ -145,8 +145,10 @@ export function SoloPlayPage({ gameId, me }: Props) {
         <h1>Solo game</h1>
         <div className={styles.timer}>
           <Timer
+            startedAt={snapshot.started_at}
             endsAt={snapshot.ends_at}
             serverNow={snapshot.server_now}
+            direction={snapshot.config.timer_direction}
             onExpired={handleEnd}
           />
         </div>

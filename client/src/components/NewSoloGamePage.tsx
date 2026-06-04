@@ -19,30 +19,43 @@ const DICE_SETS: readonly { name: string; label: string }[] = [
   { name: "6",             label: "6×6 Super Big Simple" },
 ];
 
-const TIMERS: readonly { seconds: number; label: string }[] = [
-  { seconds: 60,  label: "1 minute" },
-  { seconds: 90,  label: "1.5 minutes" },
-  { seconds: 120, label: "2 minutes" },
-  { seconds: 180, label: "3 minutes" },
-  { seconds: 240, label: "4 minutes" },
-  { seconds: 300, label: "5 minutes" },
-  { seconds: 420, label: "7 minutes" },
-  { seconds: 600, label: "10 minutes" },
+/** Same timer-mode list the multiplayer New game dialog uses —
+ *  countdown durations plus the two open-ended modes that end on
+ *  an explicit click. Solo's "End game" button is the only end path
+ *  for Count up / Untimed. */
+type TimerMode = {
+  id: string;
+  label: string;
+  seconds: number | null;
+  direction: "down" | "up";
+};
+
+const TIMER_MODES: readonly TimerMode[] = [
+  { id: "60",      label: "1 minute",    seconds: 60,   direction: "down" },
+  { id: "90",      label: "1.5 minutes", seconds: 90,   direction: "down" },
+  { id: "120",     label: "2 minutes",   seconds: 120,  direction: "down" },
+  { id: "180",     label: "3 minutes",   seconds: 180,  direction: "down" },
+  { id: "240",     label: "4 minutes",   seconds: 240,  direction: "down" },
+  { id: "300",     label: "5 minutes",   seconds: 300,  direction: "down" },
+  { id: "420",     label: "7 minutes",   seconds: 420,  direction: "down" },
+  { id: "600",     label: "10 minutes",  seconds: 600,  direction: "down" },
+  { id: "countup", label: "Count up",    seconds: null, direction: "up" },
+  { id: "untimed", label: "Untimed",     seconds: null, direction: "down" },
 ];
 
 /** Build a complete GameConfig from the two knobs we expose, filling
  *  in the same defaults the server would. Sending an explicit full
  *  shape (rather than a partial) keeps the wire payload obvious from
  *  the client side. */
-function buildConfig(diceSet: string, timerSeconds: number): GameConfig {
+function buildConfig(diceSet: string, mode: TimerMode): GameConfig {
   return {
     dice_set: diceSet,
     scoring_ladder: "basic",
     min_legal_length: 3,
     mode: "competitive",
     dupes_cancel: true,
-    timer_seconds: timerSeconds,
-    timer_direction: "down",
+    timer_seconds: mode.seconds,
+    timer_direction: mode.direction,
     min_words: null,
     max_words: null,
     min_score: null,
@@ -54,7 +67,7 @@ function buildConfig(diceSet: string, timerSeconds: number): GameConfig {
 
 export function NewSoloGamePage() {
   const [diceSet, setDiceSet] = useState("4");
-  const [timer, setTimer] = useState(180);
+  const [modeId, setModeId] = useState("180");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -63,7 +76,8 @@ export function NewSoloGamePage() {
     setError(null);
     setPending(true);
     try {
-      const snap = await api.startSolo(buildConfig(diceSet, timer));
+      const mode = TIMER_MODES.find((m) => m.id === modeId) ?? TIMER_MODES[3];
+      const snap = await api.startSolo(buildConfig(diceSet, mode));
       navigate(`/solo/${snap.game_id}`);
     } catch (err) {
       if (err instanceof ApiError) setError(err.detail);
@@ -90,11 +104,11 @@ export function NewSoloGamePage() {
         <label className={styles.field}>
           <span>Timer</span>
           <select
-            value={timer}
-            onChange={(e) => setTimer(Number(e.target.value))}
+            value={modeId}
+            onChange={(e) => setModeId(e.target.value)}
           >
-            {TIMERS.map((t) => (
-              <option key={t.seconds} value={t.seconds}>{t.label}</option>
+            {TIMER_MODES.map((m) => (
+              <option key={m.id} value={m.id}>{m.label}</option>
             ))}
           </select>
         </label>

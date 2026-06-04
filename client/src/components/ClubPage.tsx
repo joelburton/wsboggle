@@ -401,16 +401,42 @@ const DICE_SETS: readonly { name: string; label: string }[] = [
   { name: "6",             label: "6×6 Super Big Simple" },
 ];
 
-const TIMERS: readonly { seconds: number; label: string }[] = [
-  { seconds: 60,  label: "1 minute" },
-  { seconds: 90,  label: "1.5 minutes" },
-  { seconds: 120, label: "2 minutes" },
-  { seconds: 180, label: "3 minutes" },
-  { seconds: 240, label: "4 minutes" },
-  { seconds: 300, label: "5 minutes" },
-  { seconds: 420, label: "7 minutes" },
-  { seconds: 600, label: "10 minutes" },
+/** Unified timer-mode list. Each row is a (seconds, direction)
+ *  pair so the dropdown can offer countdown durations and the two
+ *  open-ended modes (count-up, untimed) in one place. CLAUDE.md
+ *  treats ``timer_direction`` as a display knob — Count up and
+ *  Untimed differ only in render; both end on an explicit
+ *  ``endGame``. */
+type TimerMode = {
+  id: string;
+  label: string;
+  seconds: number | null;
+  direction: "down" | "up";
+};
+
+const TIMER_MODES: readonly TimerMode[] = [
+  { id: "60",      label: "1 minute",    seconds: 60,   direction: "down" },
+  { id: "90",      label: "1.5 minutes", seconds: 90,   direction: "down" },
+  { id: "120",     label: "2 minutes",   seconds: 120,  direction: "down" },
+  { id: "180",     label: "3 minutes",   seconds: 180,  direction: "down" },
+  { id: "240",     label: "4 minutes",   seconds: 240,  direction: "down" },
+  { id: "300",     label: "5 minutes",   seconds: 300,  direction: "down" },
+  { id: "420",     label: "7 minutes",   seconds: 420,  direction: "down" },
+  { id: "600",     label: "10 minutes",  seconds: 600,  direction: "down" },
+  { id: "countup", label: "Count up",    seconds: null, direction: "up" },
+  { id: "untimed", label: "Untimed",     seconds: null, direction: "down" },
 ];
+
+/** Map a GameConfig back to a TIMER_MODES id so the dialog can
+ *  pre-fill the dropdown from last_config. Brand-new clubs land
+ *  on the 3-minute default. */
+function configToModeId(c: GameConfig | null): string {
+  if (c === null) return "180";
+  if (c.timer_seconds === null) {
+    return c.timer_direction === "up" ? "countup" : "untimed";
+  }
+  return String(c.timer_seconds);
+}
 
 /** Build a fresh GameConfig, merging the v1-exposed knobs with
  *  whatever the previous config used for the v2-only knobs (mode,
@@ -418,7 +444,7 @@ const TIMERS: readonly { seconds: number; label: string }[] = [
  *  any future knob choices a club picks up. */
 function buildConfig(
   diceSet: string,
-  timerSeconds: number,
+  mode: TimerMode,
   base: GameConfig | null,
 ): GameConfig {
   return {
@@ -427,8 +453,8 @@ function buildConfig(
     min_legal_length: base?.min_legal_length ?? 3,
     mode: base?.mode ?? "competitive",
     dupes_cancel: base?.dupes_cancel ?? true,
-    timer_seconds: timerSeconds,
-    timer_direction: base?.timer_direction ?? "down",
+    timer_seconds: mode.seconds,
+    timer_direction: mode.direction,
     min_words: base?.min_words ?? null,
     max_words: base?.max_words ?? null,
     min_score: base?.min_score ?? null,
@@ -444,12 +470,12 @@ function buildConfig(
 function describeConfig(c: GameConfig | null): string {
   if (c === null) return "";
   const dice = DICE_SETS.find((d) => d.name === c.dice_set)?.label ?? c.dice_set;
-  const timer =
-    c.timer_seconds === null
-      ? "untimed"
-      : TIMERS.find((t) => t.seconds === c.timer_seconds)?.label ??
-        `${c.timer_seconds}s`;
-  return `${dice} · ${timer}`;
+  const mode =
+    TIMER_MODES.find(
+      (m) => m.seconds === c.timer_seconds && m.direction === c.timer_direction,
+    )?.label ??
+    (c.timer_seconds === null ? "Untimed" : `${c.timer_seconds}s`);
+  return `${dice} · ${mode}`;
 }
 
 type NewGameDialogProps = {
@@ -469,7 +495,7 @@ type NewGameDialogProps = {
  */
 function NewGameDialog({ initial, onCancel, onStart }: NewGameDialogProps) {
   const [diceSet, setDiceSet] = useState(initial?.dice_set ?? "4");
-  const [timer, setTimer] = useState(initial?.timer_seconds ?? 180);
+  const [modeId, setModeId] = useState(configToModeId(initial));
 
   useEffect(() => {
     function onKey(e: globalThis.KeyboardEvent) {
@@ -484,7 +510,8 @@ function NewGameDialog({ initial, onCancel, onStart }: NewGameDialogProps) {
 
   function submit(e: FormEvent) {
     e.preventDefault();
-    onStart(buildConfig(diceSet, timer, initial));
+    const mode = TIMER_MODES.find((m) => m.id === modeId) ?? TIMER_MODES[3];
+    onStart(buildConfig(diceSet, mode, initial));
   }
 
   return (
@@ -507,11 +534,11 @@ function NewGameDialog({ initial, onCancel, onStart }: NewGameDialogProps) {
           <label className={styles.dialogField}>
             <span>Timer</span>
             <select
-              value={timer ?? 180}
-              onChange={(e) => setTimer(Number(e.target.value))}
+              value={modeId}
+              onChange={(e) => setModeId(e.target.value)}
             >
-              {TIMERS.map((t) => (
-                <option key={t.seconds} value={t.seconds}>{t.label}</option>
+              {TIMER_MODES.map((m) => (
+                <option key={m.id} value={m.id}>{m.label}</option>
               ))}
             </select>
           </label>
@@ -542,7 +569,12 @@ function PlayView({ snapshot, guesses, onGuess, onEndGame }: PlayProps) {
       <div className={styles.playHeader}>
         <h2>Game in progress</h2>
         <div className={styles.timer}>
-          <Timer endsAt={snapshot.ends_at} serverNow={snapshot.server_now} />
+          <Timer
+            startedAt={snapshot.started_at}
+            endsAt={snapshot.ends_at}
+            serverNow={snapshot.server_now}
+            direction={snapshot.config.timer_direction}
+          />
         </div>
       </div>
       <div className={styles.playArea}>
