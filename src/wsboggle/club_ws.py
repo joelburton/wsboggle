@@ -50,6 +50,7 @@ from wsboggle import auth, chat, clubs, games
 from wsboggle.deps import SESSION_COOKIE_NAME
 from wsboggle.shared import (
     CChat,
+    CEndGame,
     CGuess,
     CHello,
     CNewGame,
@@ -352,6 +353,9 @@ async def _recv_loop(
         if isinstance(msg, CGuess):
             await _handle_guess(ws, db, club_id=club_id, user=user, msg=msg)
             continue
+        if isinstance(msg, CEndGame):
+            await _handle_end_game(ws, db, club_id=club_id)
+            continue
 
 
 async def _handle_chat(
@@ -525,6 +529,46 @@ async def _handle_guess(
     )
 
 
+# --- Game-end + broadcast (shared by timer and manual end) ----------------
+
+
+async def _end_and_broadcast(
+    db: sqlite3.Connection, club_id: int, state: games.GameState
+) -> None:
+    """End ``state`` in the DB (if not already) and broadcast
+    ``gameEnded`` to every socket in the club. Idempotent against
+    a game that's already ended (re-end is a no-op in
+    :func:`games.end_game`)."""
+    state = games.end_game(db, state)
+    result = games.build_result(db, state)
+    await _broadcast(club_id, SGameEnded(result=result))
+
+
+# --- Manual end ----------------------------------------------------------
+
+
+async def _handle_end_game(
+    ws: WebSocket,
+    db: sqlite3.Connection,
+    *,
+    club_id: int,
+) -> None:
+    """End the club's active game now. Any member can fire this.
+
+    Cancels the scheduled timer task (if any) so the timer-driven
+    end path doesn't fire a second ``gameEnded`` after this one.
+    No active game = friendly feedback rather than an error."""
+    state = games.find_active_club_game(db, club_id)
+    if state is None:
+        await _send(ws, SFeedback(text="No game to end.", level="warn"))
+        return
+
+    timer = _timers.pop(club_id, None)
+    if timer is not None and not timer.done():
+        timer.cancel()
+    await _end_and_broadcast(db, club_id, state)
+
+
 # --- Server-driven timer --------------------------------------------------
 
 
@@ -532,26 +576,19 @@ async def _run_timer(club_id: int, game_id: int, ends_at: datetime) -> None:
     """Sleep until ``ends_at`` then end the game and broadcast the
     result.
 
-    Idempotent against a game that has *already* been ended by a
-    concurrent path (re-ending is a no-op in :func:`games.end_game`),
-    so we don't have to coordinate cancellation when v2 adds the
-    manual-end path.
-
-    A ``CancelledError`` (server shutdown, future early-end) is
-    swallowed silently — the broadcast won't happen, which is the
-    right behavior in both cases."""
+    A ``CancelledError`` (server shutdown, manual ``endGame``) is
+    swallowed silently — the manual path will have already done
+    the end + broadcast itself."""
     try:
         now = datetime.now(ends_at.tzinfo)
         delay = (ends_at - now).total_seconds()
         if delay > 0:
             await asyncio.sleep(delay)
 
-        # Open a fresh handle: the connection on app.state.db may
-        # be in use by other handlers; sqlite3 connections are
-        # thread-safe under our autocommit settings but reading
-        # from app state across module-globals is a coupling we
-        # don't need. Get the live one from any registered socket
-        # if available; otherwise we can't broadcast anyway.
+        # Open a fresh handle: the connection on app.state.db is
+        # the same one HTTP handlers use; sqlite3 connections are
+        # thread-safe under our autocommit settings. Reading it via
+        # any live socket avoids a module-global coupling.
         sockets_by_user = _registry.get(club_id) or {}
         if not sockets_by_user:
             return  # nobody to tell; the row will be cleaned up later
@@ -561,13 +598,11 @@ async def _run_timer(club_id: int, game_id: int, ends_at: datetime) -> None:
         state = games.find_game(db, game_id)
         if state is None or state.ended_at is not None:
             return
-        state = games.end_game(db, state)
-        result = games.build_result(db, state)
-        await _broadcast(club_id, SGameEnded(result=result))
+        await _end_and_broadcast(db, club_id, state)
     except asyncio.CancelledError:
         pass
     finally:
-        # Drop our entry if it's still us (a fresh newGame may have
-        # already replaced it).
+        # Drop our entry if it's still us (a fresh newGame / manual
+        # end may have already replaced or cleared it).
         if _timers.get(club_id) is asyncio.current_task():
             _timers.pop(club_id, None)

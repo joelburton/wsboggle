@@ -187,6 +187,9 @@ export type ClubSocketHandle = {
    *  into the same `GuessResponse` shape the solo HTTP path uses,
    *  so the `WordEntry` component plugs in unchanged. */
   sendGuess: (word: string) => Promise<GuessResponse>;
+  /** End the current game for everyone. Server stops the timer,
+   *  marks the row ended, and broadcasts `gameEnded`. */
+  sendEndGame: () => void;
   clearResult: () => void;
   dismissFeedback: (id: number) => void;
 };
@@ -282,6 +285,12 @@ export function useClubSocket(clubId: number): ClubSocketHandle {
     send(ws, { type: "newGame", config });
   }
 
+  function sendEndGame() {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    send(ws, { type: "endGame" });
+  }
+
   function sendGuess(word: string): Promise<GuessResponse> {
     const normalized = word.trim().toLowerCase();
     const ws = wsRef.current;
@@ -309,7 +318,15 @@ export function useClubSocket(clubId: number): ClubSocketHandle {
     dispatch({ kind: "dismissFeedback", id });
   }
 
-  return { state, sendChat, sendNewGame, sendGuess, clearResult, dismissFeedback };
+  return {
+    state,
+    sendChat,
+    sendNewGame,
+    sendGuess,
+    sendEndGame,
+    clearResult,
+    dismissFeedback,
+  };
 }
 
 function send(ws: WebSocket, msg: ClientMessage): void {

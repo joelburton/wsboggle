@@ -380,3 +380,55 @@ def test_reconnect_mid_game_includes_current_game(
         assert cg["game_id"] == joel_snap["game_id"]
         assert len(cg["your_guesses"]) == 1
         assert cg["your_guesses"][0]["word"] == legal[0].lower()
+
+
+# --- Manual end ----------------------------------------------------------
+
+
+def test_end_game_from_any_member(
+    client: TestClient, db: sqlite3.Connection
+) -> None:
+    """A manual ``endGame`` from any member ends the game; everyone
+    receives ``gameEnded``; the games row gets an ``ended_at`` stamp."""
+    joel_token, moth_token, club_id = _setup_club(client, db)
+
+    with _ws_connect(client, joel_token, f"/ws/clubs/{club_id}") as joel_ws:
+        joel_ws.receive_json()
+        with _ws_connect(client, moth_token, f"/ws/clubs/{club_id}") as moth_ws:
+            moth_ws.receive_json()
+            joel_ws.receive_json()  # moth online
+
+            # Start with a very long timer so the auto-end can't race us.
+            joel_ws.send_json(
+                {"type": "newGame", "config": _new_game_config(timer_seconds=3600)}
+            )
+            _drain_until(joel_ws, "gameStarted")
+            _drain_until(moth_ws, "gameStarted")
+
+            # moth ends the game (not the starter).
+            moth_ws.send_json({"type": "endGame"})
+
+            joel_end = _drain_until(joel_ws, "gameEnded")
+            moth_end = _drain_until(moth_ws, "gameEnded")
+
+    for msg in (joel_end, moth_end):
+        assert msg["result"]["ended_at"] is not None
+
+    row = db.execute(
+        "SELECT ended_at FROM games WHERE club_id = ?", (club_id,)
+    ).fetchone()
+    assert row["ended_at"] is not None
+
+
+def test_end_game_with_no_active_game(
+    client: TestClient, db: sqlite3.Connection
+) -> None:
+    """``endGame`` when nothing's running → ``feedback`` toast,
+    no broadcast."""
+    joel_token, _moth_token, club_id = _setup_club(client, db)
+
+    with _ws_connect(client, joel_token, f"/ws/clubs/{club_id}") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "endGame"})
+        msg = _drain_until(ws, "feedback")
+        assert "no game" in msg["text"].lower()

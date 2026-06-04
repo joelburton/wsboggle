@@ -420,13 +420,25 @@ class CGuess(BaseModel):
     word: str
 
 
+class CEndGame(BaseModel):
+    """End the current game now.
+
+    Any member can send (per CLAUDE.md). The server stops the
+    timer task, marks the game ended, and broadcasts
+    ``gameEnded``. The primary use cases are untimed / count-up
+    games (where it's the only end path) and "the timer-driven end
+    didn't fire for some reason" recovery — without this, a stuck
+    game has no way out short of restarting the server.
+    """
+
+    type: Literal["endGame"] = "endGame"
+
+
 ClientMessage = Annotated[
-    Union[CHello, CChat, CNewGame, CGuess],
+    Union[CHello, CChat, CNewGame, CGuess, CEndGame],
     Field(discriminator="type"),
 ]
-"""Everything the client can send over the club WS in this
-milestone. Manual ``endGame`` (only meaningful when ``timer_seconds``
-is null) lands when v2 exposes untimed games in the UI."""
+"""Everything the client can send over the club WS."""
 
 
 # --- Server → client ------------------------------------------------------

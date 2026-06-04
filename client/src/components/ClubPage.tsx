@@ -63,6 +63,7 @@ export function ClubPage({ clubId, me }: Props) {
     sendChat,
     sendNewGame,
     sendGuess,
+    sendEndGame,
     clearResult,
     dismissFeedback,
   } = useClubSocket(clubId);
@@ -205,6 +206,7 @@ export function ClubPage({ clubId, me }: Props) {
               snapshot={state.currentGame}
               guesses={state.yourGuesses}
               onGuess={sendGuess}
+              onEndGame={sendEndGame}
             />
           )}
           {mode === "lobby" && (
@@ -514,9 +516,17 @@ type PlayProps = {
   snapshot: GameSnapshot;
   guesses: GuessRecord[];
   onGuess: (word: string) => Promise<GuessResponse>;
+  onEndGame: () => void;
 };
 
-function PlayView({ snapshot, guesses, onGuess }: PlayProps) {
+function PlayView({ snapshot, guesses, onGuess, onEndGame }: PlayProps) {
+  const [confirmEnd, setConfirmEnd] = useState(false);
+  // Reset confirm state when the active game changes (e.g. a new
+  // round started after this one ended).
+  useEffect(() => {
+    setConfirmEnd(false);
+  }, [snapshot.game_id]);
+
   return (
     <section className={styles.section}>
       <div className={styles.playHeader}>
@@ -530,6 +540,29 @@ function PlayView({ snapshot, guesses, onGuess }: PlayProps) {
           <Board board={snapshot.board} />
           <div className={styles.entry}>
             <WordEntry onSubmit={onGuess} />
+          </div>
+          <div className={styles.endRow}>
+            {confirmEnd ? (
+              <>
+                <span className={styles.confirmText}>
+                  End the game for everyone?
+                </span>
+                <button onClick={onEndGame}>Yes, end game</button>
+                <button
+                  className="secondary"
+                  onClick={() => setConfirmEnd(false)}
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button
+                className="secondary"
+                onClick={() => setConfirmEnd(true)}
+              >
+                End game
+              </button>
+            )}
           </div>
         </div>
         <WordList guesses={guesses} className={styles.wordListCol} />

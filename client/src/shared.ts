@@ -209,7 +209,9 @@ export type CHello = { type: "hello" };
 export type CChat = { type: "chat"; text: string };
 export type CNewGame = { type: "newGame"; config: GameConfig };
 export type CGuess = { type: "guess"; word: string };
-export type ClientMessage = CHello | CChat | CNewGame | CGuess;
+/** End the current game now. Any member can send (per CLAUDE.md). */
+export type CEndGame = { type: "endGame" };
+export type ClientMessage = CHello | CChat | CNewGame | CGuess | CEndGame;
 
 // Server → client
 
