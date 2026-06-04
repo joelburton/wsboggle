@@ -157,11 +157,19 @@ class GuessRecord(BaseModel):
     ``points`` is the *raw* score under the game's ladder (no
     dupes-cancel adjustment yet — that's an end-of-game concern).
     Illegal guesses have ``points=0`` and ``is_legal=False``.
+
+    ``added_by_*`` is populated in collaborative mode so the
+    client can color a recently-added word in its adder's shade
+    for 5 s. ``None`` in competitive (the viewer is always the
+    adder of their own list) and historical entries from before
+    the field existed.
     """
 
     word: str
     is_legal: bool
     points: int
+    added_by_user_id: int | None = None
+    added_by_handle: str | None = None
 
 
 class BoardStats(BaseModel):
@@ -546,6 +554,25 @@ class SGuessAccepted(BaseModel):
     result: Literal["accepted", "too_short", "not_on_board", "not_a_word"]
 
 
+class SGuessSubmitted(BaseModel):
+    """A team member's accepted guess in collaborative mode.
+    Broadcast to **every** member's socket (including the sender);
+    everyone's WordList renders the same shared word from this.
+
+    The client highlights newly-arrived entries in the adder's
+    player color for 5 s — that's the only persistent
+    attribution; after the fade the word is anonymous in the
+    shared list. Competitive mode never emits this message
+    (everything stays private as ``guessAccepted``).
+    """
+
+    type: Literal["guessSubmitted"] = "guessSubmitted"
+    word: str
+    points: int
+    user_id: int
+    handle: str
+
+
 class SGuessRejected(BaseModel):
     """The server rejected one of your guesses. Sent only to the
     submitting socket. ``reason`` mirrors :data:`GuessResult`
@@ -573,6 +600,7 @@ ServerMessage = Annotated[
         SFeedback,
         SGameStarted,
         SGuessAccepted,
+        SGuessSubmitted,
         SGuessRejected,
         SGameEnded,
     ],

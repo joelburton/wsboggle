@@ -29,6 +29,14 @@ import type {
   ServerMessage,
 } from "./shared";
 
+/** GuessRecord plus a client-only ``addedAt`` wall-clock
+ *  timestamp set when the entry arrived live (collaborative
+ *  ``guessSubmitted`` broadcast or competitive ``guessAccepted``).
+ *  Used by the WordList to render the 5-second highlight on
+ *  recent collaborative entries. Historical entries from the
+ *  initial snapshot leave it undefined. */
+export type LocalGuessRecord = GuessRecord & { addedAt?: number };
+
 export type ClubSocketState = {
   /** True while the underlying WebSocket is OPEN. */
   connected: boolean;
@@ -46,10 +54,18 @@ export type ClubSocketState = {
    *  no game is running. Updated by clubState (on connect),
    *  gameStarted (new game), and cleared on gameEnded. */
   currentGame: GameSnapshot | null;
-  /** Your own guesses for the active game. Seeded from
-   *  `clubState.current_game.your_guesses` and patched on each
-   *  guessAccepted. */
-  yourGuesses: GuessRecord[];
+  /** Word list to render for the active game.
+   *
+   *  In competitive mode this is the viewer's own private list
+   *  (legal + illegal-but-recorded). In collaborative mode it's
+   *  the shared team list — every member sees the same entries
+   *  and ``added_by_*`` tells us who added each one. Entries that
+   *  arrived since this component instance mounted carry an
+   *  ``addedAt`` wall-clock timestamp so the WordList can fade
+   *  the 5-second arrival highlight; historical entries from
+   *  ``clubState.current_game.your_guesses`` arrive without it
+   *  and stay un-highlighted. */
+  yourGuesses: LocalGuessRecord[];
   /** End-of-game payload, populated on `gameEnded`. The consumer
    *  shows it and then clears it (via `clearResult`) when the
    *  user returns to the main club view. */
@@ -142,11 +158,18 @@ function reducer(state: ClubSocketState, action: Action): ClubSocketState {
             gameResult: null,
             lastConfig: msg.snapshot.config,
           };
-        case "guessAccepted":
-          // Append to the word list — both legal and the three
-          // illegal-but-recorded cases. Duplicates / inactive
-          // wouldn't have come through here (they'd be
-          // guessRejected and not added).
+        case "guessAccepted": {
+          // In competitive mode this is the only "your guess was
+          // recorded" channel — append legal + illegal-but-shown
+          // entries to the private word list. In collaborative
+          // mode the *accepted* path arrives as guessSubmitted
+          // (broadcast) instead, so guessAccepted is only the
+          // illegal feedback channel — which doesn't belong in
+          // the shared list. The reducer can tell the modes apart
+          // via the active game's config.
+          const isCollab =
+            state.currentGame?.config.mode === "collaborative";
+          if (isCollab) return state;
           return {
             ...state,
             yourGuesses: [
@@ -155,6 +178,25 @@ function reducer(state: ClubSocketState, action: Action): ClubSocketState {
                 word: msg.word,
                 is_legal: msg.result === "accepted",
                 points: msg.points,
+                added_by_user_id: null,
+                added_by_handle: null,
+                addedAt: Date.now(),
+              },
+            ],
+          };
+        }
+        case "guessSubmitted":
+          return {
+            ...state,
+            yourGuesses: [
+              ...state.yourGuesses,
+              {
+                word: msg.word,
+                is_legal: true,
+                points: msg.points,
+                added_by_user_id: msg.user_id,
+                added_by_handle: msg.handle,
+                addedAt: Date.now(),
               },
             ],
           };
@@ -194,7 +236,7 @@ export type ClubSocketHandle = {
   dismissFeedback: (id: number) => void;
 };
 
-export function useClubSocket(clubId: number): ClubSocketHandle {
+export function useClubSocket(clubId: number, myUserId: number): ClubSocketHandle {
   const [state, dispatch] = useReducer(reducer, initialState);
   // The WebSocket itself lives in a ref so the send-helpers are
   // stable across renders; consumers can put them in event handlers
@@ -209,6 +251,12 @@ export function useClubSocket(clubId: number): ClubSocketHandle {
   // use, but Boggle's submit cadence is slow enough that a manual
   // re-type is fine.
   const pendingRef = useRef<Map<string, (r: GuessResponse) => void>>(new Map());
+
+  // The onmessage closure needs the latest myUserId without
+  // re-subscribing the WebSocket every render. A ref keeps the
+  // handler stable while still reading the current value.
+  const myUserIdRef = useRef(myUserId);
+  myUserIdRef.current = myUserId;
 
   useEffect(() => {
     const ws = new WebSocket(wsUrl(clubId));
@@ -236,6 +284,22 @@ export function useClubSocket(clubId: number): ClubSocketHandle {
           resolve({
             word: msg.word,
             result: msg.result,
+            points: msg.points,
+          });
+        }
+      } else if (msg.type === "guessSubmitted") {
+        // Collaborative accepts come through here. Only resolve the
+        // pending promise when *we're* the submitter — otherwise a
+        // teammate's racing-with-us submission of the same word
+        // would wrongly resolve our pending as accepted, hiding the
+        // already_submitted feedback we'd want to see.
+        if (msg.user_id !== myUserIdRef.current) return;
+        const resolve = pending.get(msg.word);
+        if (resolve) {
+          pending.delete(msg.word);
+          resolve({
+            word: msg.word,
+            result: "accepted",
             points: msg.points,
           });
         }

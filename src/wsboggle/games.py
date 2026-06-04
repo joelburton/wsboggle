@@ -320,10 +320,20 @@ def submit_guess(
 
     normalized = word.strip().lower()
 
-    existing = db.execute(
-        "SELECT 1 FROM guesses WHERE game_id = ? AND user_id = ? AND word = ?",
-        (game.id, user_id, normalized),
-    ).fetchone()
+    # In collaborative mode the "already submitted" check spans every
+    # member of the team: once any player has accepted a word, the
+    # word is off the table for everyone. In competitive mode each
+    # player keeps their own list independent of the others.
+    if game.config.mode == "collaborative":
+        existing = db.execute(
+            "SELECT 1 FROM guesses WHERE game_id = ? AND word = ?",
+            (game.id, normalized),
+        ).fetchone()
+    else:
+        existing = db.execute(
+            "SELECT 1 FROM guesses WHERE game_id = ? AND user_id = ? AND word = ?",
+            (game.id, user_id, normalized),
+        ).fetchone()
     if existing is not None:
         return GuessOutcome(result="already_submitted", points=0)
 
@@ -392,10 +402,24 @@ def to_snapshot(
 ) -> GameSnapshot:
     """Build the wire :class:`GameSnapshot` for one viewer.
 
-    ``viewer_user_id`` shapes ``your_guesses`` — for multiplayer the
-    same game produces a different snapshot per viewer (each sees
-    only their own list, per competitive rules).
+    ``viewer_user_id`` shapes ``your_guesses`` in competitive mode
+    — each viewer sees only their own list. In collaborative mode
+    every viewer sees the same shared team list and the parameter
+    is unused.
     """
+    if state.config.mode == "collaborative":
+        guesses = team_guesses(
+            db,
+            game_id=state.id,
+            scoring_ladder=state.config.scoring_ladder,
+        )
+    else:
+        guesses = user_guesses(
+            db,
+            game_id=state.id,
+            user_id=viewer_user_id,
+            scoring_ladder=state.config.scoring_ladder,
+        )
     dice_set = dice.get_by_name(state.config.dice_set)
     return GameSnapshot(
         game_id=state.id,
@@ -405,12 +429,7 @@ def to_snapshot(
         ends_at=None if state.ends_at is None else _iso(state.ends_at),
         ended_at=None if state.ended_at is None else _iso(state.ended_at),
         server_now=_iso(_now()),
-        your_guesses=user_guesses(
-            db,
-            game_id=state.id,
-            user_id=viewer_user_id,
-            scoring_ladder=state.config.scoring_ladder,
-        ),
+        your_guesses=guesses,
         board_stats=_board_stats(state),
     )
 
@@ -439,8 +458,8 @@ def user_guesses(
     scoring_ladder: str,
 ) -> list[GuessRecord]:
     """All guesses one user has submitted in one game, in submission
-    order. Used to populate ``GameSnapshot.your_guesses`` so
-    rejoiners see their own history."""
+    order. Used to populate ``GameSnapshot.your_guesses`` for
+    competitive games so rejoiners see their own history."""
     rows = db.execute(
         "SELECT word, is_legal FROM guesses WHERE game_id = ? AND user_id = ? "
         "ORDER BY id ASC",
@@ -451,6 +470,45 @@ def user_guesses(
         is_legal = bool(row["is_legal"])
         points = scoring.score_word(row["word"], scoring_ladder) if is_legal else 0
         out.append(GuessRecord(word=row["word"], is_legal=is_legal, points=points))
+    return out
+
+
+def team_guesses(
+    db: sqlite3.Connection,
+    *,
+    game_id: int,
+    scoring_ladder: str,
+) -> list[GuessRecord]:
+    """Every accepted (legal) guess in one game, regardless of
+    submitter. Used to fill the shared word list in collaborative
+    mode. Each record carries ``added_by_*`` so the client can
+    color recently-arrived entries by their adder.
+
+    Illegal attempts don't reach the shared list — they're
+    submitter-private feedback only, never broadcast. We filter to
+    ``is_legal = 1`` here too.
+    """
+    rows = db.execute(
+        """
+        SELECT g.word AS word, g.user_id AS user_id, u.handle AS handle
+        FROM guesses g
+        JOIN users u ON u.id = g.user_id
+        WHERE g.game_id = ? AND g.is_legal = 1
+        ORDER BY g.id ASC
+        """,
+        (game_id,),
+    ).fetchall()
+    out: list[GuessRecord] = []
+    for row in rows:
+        out.append(
+            GuessRecord(
+                word=row["word"],
+                is_legal=True,
+                points=scoring.score_word(row["word"], scoring_ladder),
+                added_by_user_id=row["user_id"],
+                added_by_handle=row["handle"],
+            )
+        )
     return out
 
 
@@ -599,31 +657,37 @@ def build_result(db: sqlite3.Connection, game: GameState) -> GameResult:
     the result reflects "what would the leaderboard be if we ended
     right now," which is occasionally useful for testing.
     """
-    scored = _score_players(
-        db,
-        game_id=game.id,
-        scoring_ladder=game.config.scoring_ladder,
-        dupes_cancel=game.config.dupes_cancel,
-        expected_user_ids=_expected_player_ids(db, game),
-    )
-
-    players = [
-        PlayerResult(
-            user_id=p.user_id,
-            handle=p.handle,
-            words=[
-                PlayerWordEntry(word=w.word, points=w.final_points, shared_with=w.shared_with)
-                for w in p.words
-            ],
-            raw_total=p.raw_total,
-            final_total=p.final_total,
+    if game.config.mode == "collaborative":
+        players = [_team_result(db, game)]
+    else:
+        scored = _score_players(
+            db,
+            game_id=game.id,
+            scoring_ladder=game.config.scoring_ladder,
+            dupes_cancel=game.config.dupes_cancel,
+            expected_user_ids=_expected_player_ids(db, game),
         )
-        for p in scored
-    ]
-    players.sort(key=lambda p: -p.final_total)
+        players = [
+            PlayerResult(
+                user_id=p.user_id,
+                handle=p.handle,
+                words=[
+                    PlayerWordEntry(word=w.word, points=w.final_points, shared_with=w.shared_with)
+                    for w in p.words
+                ],
+                raw_total=p.raw_total,
+                final_total=p.final_total,
+            )
+            for p in scored
+        ]
+        players.sort(key=lambda p: -p.final_total)
 
-    # Missed = legal words no one found, with what they'd have been worth.
-    found = {w.word for p in scored for w in p.words}
+    # Missed = legal words the team(s) didn't find, with the points
+    # they would have been worth.
+    found: set[str] = set()
+    for p in players:
+        for w in p.words:
+            found.add(w.word)
     missed = [
         MissedWord(word=w, points=scoring.score_word(w, game.config.scoring_ladder))
         for w in sorted(game.legal_words)
@@ -642,6 +706,47 @@ def build_result(db: sqlite3.Connection, game: GameState) -> GameResult:
         duration_seconds=duration,
         players=players,
         missed_words=missed,
+    )
+
+
+def _team_result(db: sqlite3.Connection, game: GameState) -> PlayerResult:
+    """Bundle every accepted guess in a collaborative game into one
+    "team" :class:`PlayerResult`. No per-player breakdown — the
+    spec's "strictly shared" rule means the result panel just
+    shows one block with the combined totals.
+
+    ``user_id = 0`` and ``handle = "team"`` are sentinels: the
+    PlayerResult shape is per-player, but here it's the whole
+    team. The client renders the collaborative result panel off
+    ``result.config.mode``, not these fields.
+    """
+    rows = db.execute(
+        "SELECT word FROM guesses WHERE game_id = ? AND is_legal = 1 "
+        "ORDER BY id ASC",
+        (game.id,),
+    ).fetchall()
+    # Submission order is preserved but duplicates collapsed —
+    # collaborative dedup prevents new ones from being inserted, and
+    # if a race ever did sneak one through it shouldn't count twice
+    # at scoring time.
+    seen: set[str] = set()
+    words: list[PlayerWordEntry] = []
+    raw_total = 0
+    for row in rows:
+        w = row["word"]
+        if w in seen:
+            continue
+        seen.add(w)
+        pts = scoring.score_word(w, game.config.scoring_ladder)
+        words.append(PlayerWordEntry(word=w, points=pts, shared_with=[]))
+        raw_total += pts
+
+    return PlayerResult(
+        user_id=0,
+        handle="team",
+        words=words,
+        raw_total=raw_total,
+        final_total=raw_total,
     )
 
 
@@ -725,17 +830,31 @@ def list_club_games(
     out: list[ClubGameSummary] = []
     for row in rows:
         config = GameConfig.model_validate_json(row["config"])
-        scored = _score_players(
-            db,
-            game_id=row["id"],
-            scoring_ladder=config.scoring_ladder,
-            dupes_cancel=config.dupes_cancel,
-            expected_user_ids=member_ids,
-        )
-        players = sorted(
-            [PlayerScoreSummary(handle=p.handle, final_total=p.final_total) for p in scored],
-            key=lambda p: -p.final_total,
-        )
+        if config.mode == "collaborative":
+            # One team line per game — the shared total of all
+            # accepted distinct words.
+            team_rows = db.execute(
+                "SELECT DISTINCT word FROM guesses "
+                "WHERE game_id = ? AND is_legal = 1",
+                (row["id"],),
+            ).fetchall()
+            total = sum(
+                scoring.score_word(r["word"], config.scoring_ladder)
+                for r in team_rows
+            )
+            players = [PlayerScoreSummary(handle="team", final_total=total)]
+        else:
+            scored = _score_players(
+                db,
+                game_id=row["id"],
+                scoring_ladder=config.scoring_ladder,
+                dupes_cancel=config.dupes_cancel,
+                expected_user_ids=member_ids,
+            )
+            players = sorted(
+                [PlayerScoreSummary(handle=p.handle, final_total=p.final_total) for p in scored],
+                key=lambda p: -p.final_total,
+            )
 
         out.append(
             ClubGameSummary(

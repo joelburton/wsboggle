@@ -32,10 +32,14 @@ type Props = {
  *  of any word — particularly useful when scanning the "missed" list
  *  to confirm a word you didn't see was actually reachable. */
 export function GameResultPanel({ result, viewerUserId }: Props) {
+  const collaborative = result.config.mode === "collaborative";
+
   // Viewer first; others keep server's leaderboard order
   // (final_total desc). For solo this collapses to a single block.
+  // Collaborative results are already a single "team" entry so no
+  // re-ordering is needed (and the viewer-pin doesn't make sense).
   const players = [...result.players];
-  if (viewerUserId !== undefined) {
+  if (viewerUserId !== undefined && !collaborative) {
     const idx = players.findIndex((p) => p.user_id === viewerUserId);
     if (idx > 0) {
       const [viewer] = players.splice(idx, 1);
@@ -90,8 +94,8 @@ export function GameResultPanel({ result, viewerUserId }: Props) {
       </div>
 
       {players.map((p) => {
-        const isViewer = p.user_id === viewerUserId;
-        const color = colorForHandle(p.handle);
+        const isViewer = !collaborative && p.user_id === viewerUserId;
+        const color = collaborative ? "#374151" : colorForHandle(p.handle);
         return (
           <div
             key={p.user_id}
@@ -99,6 +103,9 @@ export function GameResultPanel({ result, viewerUserId }: Props) {
             style={{
               // Left accent in the player's color so the block is
               // visually claimed even before you read the handle.
+              // In collaborative mode the "player" is the whole
+              // team — we use a neutral gray rather than a
+              // confusing player-shade.
               borderLeft: `4px solid ${color}`,
               ...(isViewer ? { background: "#f9fafb" } : {}),
             }}
@@ -107,11 +114,15 @@ export function GameResultPanel({ result, viewerUserId }: Props) {
               <strong>{p.final_total}</strong> point{p.final_total === 1 ? "" : "s"}
               {" · "}
               {p.words.length} word{p.words.length === 1 ? "" : "s"}
-              {" · "}
-              <span className={styles.playerHandle} style={{ color }}>
-                {p.handle}
-              </span>
-              {isViewer && <span className={styles.youTag}> (you)</span>}
+              {!collaborative && (
+                <>
+                  {" · "}
+                  <span className={styles.playerHandle} style={{ color }}>
+                    {p.handle}
+                  </span>
+                  {isViewer && <span className={styles.youTag}> (you)</span>}
+                </>
+              )}
             </div>
 
             {p.words.length === 0 ? (

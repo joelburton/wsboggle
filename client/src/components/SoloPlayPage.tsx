@@ -93,6 +93,8 @@ export function SoloPlayPage({ gameId, me }: Props) {
             word: res.word,
             is_legal: res.result === "accepted",
             points: res.points,
+            added_by_user_id: null,
+            added_by_handle: null,
           }],
         };
       });
@@ -170,7 +172,11 @@ export function SoloPlayPage({ gameId, me }: Props) {
 
         <div className={styles.rightCol}>
           <BoardStats stats={snapshot.board_stats} guesses={guesses} />
-          <WordList guesses={guesses} className={styles.wordList} />
+          <WordList
+            guesses={guesses}
+            myUserId={me.user.id}
+            className={styles.wordList}
+          />
         </div>
       </div>
     </div>

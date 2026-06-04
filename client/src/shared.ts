@@ -80,6 +80,10 @@ export type GuessRecord = {
   word: string;
   is_legal: boolean;
   points: number;
+  /** Filled in collaborative mode; null in competitive (where the
+   *  list is always the viewer's own) and on historical entries. */
+  added_by_user_id: number | null;
+  added_by_handle: string | null;
 };
 
 export type BoardStats = {
@@ -271,6 +275,14 @@ export type SGuessAccepted = {
   result: "accepted" | "too_short" | "not_on_board" | "not_a_word";
 };
 
+export type SGuessSubmitted = {
+  type: "guessSubmitted";
+  word: string;
+  points: number;
+  user_id: number;
+  handle: string;
+};
+
 export type SGuessRejected = {
   type: "guessRejected";
   word: string;
@@ -289,5 +301,6 @@ export type ServerMessage =
   | SFeedback
   | SGameStarted
   | SGuessAccepted
+  | SGuessSubmitted
   | SGuessRejected
   | SGameEnded;

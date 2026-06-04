@@ -68,12 +68,15 @@ def _ws_connect(client: TestClient, token: str, url: str):
 # --- Wire helpers ---------------------------------------------------------
 
 
-def _new_game_config(timer_seconds: int | None = 180) -> dict[str, Any]:
+def _new_game_config(
+    timer_seconds: int | None = 180,
+    mode: str = "competitive",
+) -> dict[str, Any]:
     return {
         "dice_set": "4",
         "scoring_ladder": "basic",
         "min_legal_length": 3,
-        "mode": "competitive",
+        "mode": mode,
         "dupes_cancel": True,
         "timer_seconds": timer_seconds,
         "timer_direction": "down",
@@ -432,3 +435,164 @@ def test_end_game_with_no_active_game(
         ws.send_json({"type": "endGame"})
         msg = _drain_until(ws, "feedback")
         assert "no game" in msg["text"].lower()
+
+
+# --- Collaborative mode --------------------------------------------------
+
+
+def _pick_legal_word(db: sqlite3.Connection, game_id: int) -> str:
+    """Pull one legal word off the freshly-generated board so we have
+    a guaranteed-acceptable guess to feed into the WS."""
+    import json
+    row = db.execute(
+        "SELECT legal_words FROM games WHERE id = ?", (game_id,)
+    ).fetchone()
+    legal = sorted(json.loads(row["legal_words"]), key=len, reverse=True)
+    assert legal, "board should have at least one legal word"
+    return legal[0]
+
+
+def test_collab_accepted_guess_broadcasts(
+    client: TestClient, db: sqlite3.Connection
+) -> None:
+    """In collaborative mode an accepted guess broadcasts
+    ``guessSubmitted`` to every connected socket, *including* the
+    submitter — the sender's WordEntry promise resolves off that
+    same broadcast."""
+    joel_token, moth_token, club_id = _setup_club(client, db)
+
+    with _ws_connect(client, joel_token, f"/ws/clubs/{club_id}") as joel_ws:
+        joel_ws.receive_json()
+        with _ws_connect(client, moth_token, f"/ws/clubs/{club_id}") as moth_ws:
+            moth_ws.receive_json()
+            joel_ws.receive_json()  # moth online
+
+            joel_ws.send_json(
+                {"type": "newGame", "config": _new_game_config(mode="collaborative")}
+            )
+            snap = _drain_until(joel_ws, "gameStarted")["snapshot"]
+            _drain_until(moth_ws, "gameStarted")
+
+            word = _pick_legal_word(db, snap["game_id"])
+            joel_ws.send_json({"type": "guess", "word": word})
+
+            for_joel = _drain_until(joel_ws, "guessSubmitted")
+            for_moth = _drain_until(moth_ws, "guessSubmitted")
+
+    for seen in (for_joel, for_moth):
+        assert seen["word"] == word.lower()
+        assert seen["points"] > 0
+        assert seen["handle"] == "joel"
+
+
+def test_collab_dedup_across_users(
+    client: TestClient, db: sqlite3.Connection
+) -> None:
+    """Once any team member accepts a word, the next submitter
+    gets ``already_submitted`` (no second broadcast, no
+    double-count)."""
+    joel_token, moth_token, club_id = _setup_club(client, db)
+
+    with _ws_connect(client, joel_token, f"/ws/clubs/{club_id}") as joel_ws:
+        joel_ws.receive_json()
+        with _ws_connect(client, moth_token, f"/ws/clubs/{club_id}") as moth_ws:
+            moth_ws.receive_json()
+            joel_ws.receive_json()
+
+            joel_ws.send_json(
+                {"type": "newGame", "config": _new_game_config(mode="collaborative")}
+            )
+            snap = _drain_until(joel_ws, "gameStarted")["snapshot"]
+            _drain_until(moth_ws, "gameStarted")
+
+            word = _pick_legal_word(db, snap["game_id"])
+            joel_ws.send_json({"type": "guess", "word": word})
+            _drain_until(joel_ws, "guessSubmitted")
+            _drain_until(moth_ws, "guessSubmitted")
+
+            moth_ws.send_json({"type": "guess", "word": word})
+            seen = _drain_until(moth_ws, "guessRejected")
+            assert seen["reason"] == "already_submitted"
+
+    # Only one row should exist in the DB.
+    n = db.execute(
+        "SELECT COUNT(*) AS n FROM guesses WHERE game_id = ?",
+        (snap["game_id"],),
+    ).fetchone()["n"]
+    assert n == 1
+
+
+def test_collab_reconnect_sees_team_list(
+    client: TestClient, db: sqlite3.Connection
+) -> None:
+    """A mid-game reconnect's ``clubState.current_game.your_guesses``
+    is the *shared* team list, not just the reconnecter's own
+    submissions."""
+    joel_token, moth_token, club_id = _setup_club(client, db)
+
+    with _ws_connect(client, joel_token, f"/ws/clubs/{club_id}") as joel_ws:
+        joel_ws.receive_json()
+        with _ws_connect(client, moth_token, f"/ws/clubs/{club_id}") as moth_ws:
+            moth_ws.receive_json()
+            joel_ws.receive_json()
+
+            joel_ws.send_json(
+                {"type": "newGame", "config": _new_game_config(mode="collaborative")}
+            )
+            snap = _drain_until(joel_ws, "gameStarted")["snapshot"]
+            _drain_until(moth_ws, "gameStarted")
+
+            word = _pick_legal_word(db, snap["game_id"])
+            # moth submits — joel reconnects below and should see it.
+            moth_ws.send_json({"type": "guess", "word": word})
+            _drain_until(joel_ws, "guessSubmitted")
+            _drain_until(moth_ws, "guessSubmitted")
+
+        # joel reconnects (close + reopen).
+        joel_ws.close()
+
+    with _ws_connect(client, joel_token, f"/ws/clubs/{club_id}") as joel2:
+        state = joel2.receive_json()
+        cg = state["current_game"]
+        assert cg is not None
+        words = [g["word"] for g in cg["your_guesses"]]
+        assert word.lower() in words
+        added_by = cg["your_guesses"][0]["added_by_handle"]
+        assert added_by == "moth"
+
+
+def test_collab_result_is_single_team_block(
+    client: TestClient, db: sqlite3.Connection
+) -> None:
+    """End-of-game result in collaborative mode has one entry,
+    handle 'team', containing every accepted word."""
+    joel_token, moth_token, club_id = _setup_club(client, db)
+
+    with _ws_connect(client, joel_token, f"/ws/clubs/{club_id}") as joel_ws:
+        joel_ws.receive_json()
+        with _ws_connect(client, moth_token, f"/ws/clubs/{club_id}") as moth_ws:
+            moth_ws.receive_json()
+            joel_ws.receive_json()
+
+            joel_ws.send_json(
+                {"type": "newGame",
+                 "config": _new_game_config(mode="collaborative")}
+            )
+            snap = _drain_until(joel_ws, "gameStarted")["snapshot"]
+            _drain_until(moth_ws, "gameStarted")
+
+            word = _pick_legal_word(db, snap["game_id"])
+            moth_ws.send_json({"type": "guess", "word": word})
+            _drain_until(joel_ws, "guessSubmitted")
+            _drain_until(moth_ws, "guessSubmitted")
+
+            joel_ws.send_json({"type": "endGame"})
+            result_msg = _drain_until(joel_ws, "gameEnded")
+            _drain_until(moth_ws, "gameEnded")
+
+    result = result_msg["result"]
+    assert len(result["players"]) == 1
+    team = result["players"][0]
+    assert team["handle"] == "team"
+    assert team["final_total"] > 0
+    assert any(w["word"] == word.lower() for w in team["words"])

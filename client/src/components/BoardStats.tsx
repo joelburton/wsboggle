@@ -17,10 +17,14 @@ import styles from "./BoardStats.module.css";
 type Props = {
   stats: BoardStatsType;
   guesses: GuessRecord[];
+  /** Switches the "You" column header to "Us" — the BoardStats
+   *  numbers always reflect the same list the WordList shows, so
+   *  this just relabels the column to match the team context. */
+  collaborative?: boolean;
   className?: string;
 };
 
-export function BoardStats({ stats, guesses, className }: Props) {
+export function BoardStats({ stats, guesses, collaborative, className }: Props) {
   // Derive the player's running totals from their legal guesses.
   // Illegal entries don't count toward any column — they're already
   // greyed out in the word list.
@@ -38,7 +42,7 @@ export function BoardStats({ stats, guesses, className }: Props) {
     <div className={`${styles.panel} ${className ?? ""}`}>
       <div className={styles.head}>
         <span />
-        <span className={styles.colHead}>You</span>
+        <span className={styles.colHead}>{collaborative ? "Us" : "You"}</span>
         <span className={styles.colHead}>Board</span>
       </div>
       <StatRow label="Words" you={words} max={stats.total_words} />

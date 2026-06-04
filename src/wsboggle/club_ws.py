@@ -64,6 +64,7 @@ from wsboggle.shared import (
     SGameStarted,
     SGuessAccepted,
     SGuessRejected,
+    SGuessSubmitted,
     SMemberPresence,
     ServerMessage,
 )
@@ -514,10 +515,27 @@ async def _handle_guess(
     outcome = games.submit_guess(db, state, user_id=user.id, word=msg.word)
     normalized = msg.word.strip().lower()
 
+    if outcome.result == "accepted" and state.config.mode == "collaborative":
+        # Collaborative mode: the word lands in the shared team list,
+        # so every member's socket gets it — including the sender's,
+        # whose WordEntry promise resolves off the same broadcast.
+        await _broadcast(
+            club_id,
+            SGuessSubmitted(
+                word=normalized,
+                points=outcome.points,
+                user_id=user.id,
+                handle=user.handle,
+            ),
+        )
+        return
+
     if outcome.result in ("accepted", "too_short", "not_on_board", "not_a_word"):
-        # The illegal-but-recorded cases come through as guessAccepted
-        # too — the word landed in the player's list (struck through),
-        # and the result code drives the immediate-feedback message.
+        # Competitive accepted (private list) and any illegal-but-
+        # recorded case (collaborative *or* competitive) come back
+        # as guessAccepted. The client decides whether to append:
+        # competitive always does, collaborative skips the
+        # illegals (they're only useful for the entry-box feedback).
         await _send(
             ws,
             SGuessAccepted(

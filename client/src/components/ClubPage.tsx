@@ -28,7 +28,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { api, ApiError } from "../api";
-import { useClubSocket } from "../clubSocket";
+import { useClubSocket, type LocalGuessRecord } from "../clubSocket";
 import { Link } from "../routing";
 import type {
   ChatMessage,
@@ -37,7 +37,6 @@ import type {
   GameConfig,
   GameResult,
   GameSnapshot,
-  GuessRecord,
   GuessResponse,
   MeResponse,
 } from "../shared";
@@ -69,7 +68,7 @@ export function ClubPage({ clubId, me }: Props) {
     sendEndGame,
     clearResult,
     dismissFeedback,
-  } = useClubSocket(clubId);
+  } = useClubSocket(clubId, me.user.id);
   const [history, setHistory] = useState<ClubGameSummary[] | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
 
@@ -216,6 +215,7 @@ export function ClubPage({ clubId, me }: Props) {
             <PlayView
               snapshot={state.currentGame}
               guesses={state.yourGuesses}
+              myUserId={me.user.id}
               onGuess={sendGuess}
               onEndGame={sendEndGame}
             />
@@ -458,6 +458,7 @@ function buildConfig(
   diceSet: string,
   mode: TimerMode,
   scoringLadder: string,
+  gameMode: "competitive" | "collaborative",
   constraints: Constraints,
   base: GameConfig | null,
 ): GameConfig {
@@ -465,7 +466,10 @@ function buildConfig(
     dice_set: diceSet,
     scoring_ladder: scoringLadder,
     min_legal_length: base?.min_legal_length ?? 3,
-    mode: base?.mode ?? "competitive",
+    mode: gameMode,
+    // Dupes-cancel only matters in competitive; collaborative
+    // dedups across players before counting, so the flag is moot
+    // there. Default true (the Boggle classic rule).
     dupes_cancel: base?.dupes_cancel ?? true,
     timer_seconds: mode.seconds,
     timer_direction: mode.direction,
@@ -527,6 +531,9 @@ function NewGameDialog({ initial, onCancel, onStart }: NewGameDialogProps) {
   const [scoringLadder, setScoringLadder] = useState(
     initial?.scoring_ladder ?? "basic",
   );
+  const [gameMode, setGameMode] = useState<"competitive" | "collaborative">(
+    initial?.mode ?? "competitive",
+  );
   const [constraints, setConstraints] = useState<Constraints>(
     constraintsFromConfig(initial),
   );
@@ -545,7 +552,9 @@ function NewGameDialog({ initial, onCancel, onStart }: NewGameDialogProps) {
   function submit(e: FormEvent) {
     e.preventDefault();
     const mode = TIMER_MODES.find((m) => m.id === modeId) ?? TIMER_MODES[3];
-    onStart(buildConfig(diceSet, mode, scoringLadder, constraints, initial));
+    onStart(
+      buildConfig(diceSet, mode, scoringLadder, gameMode, constraints, initial),
+    );
   }
 
   return (
@@ -577,6 +586,22 @@ function NewGameDialog({ initial, onCancel, onStart }: NewGameDialogProps) {
             </select>
           </label>
           <label className={styles.dialogField}>
+            <span>Mode</span>
+            <select
+              value={gameMode}
+              onChange={(e) =>
+                setGameMode(e.target.value as "competitive" | "collaborative")
+              }
+            >
+              <option value="competitive">
+                Competitive — private lists, dupes cancel
+              </option>
+              <option value="collaborative">
+                Collaborative — shared list, dedup across players
+              </option>
+            </select>
+          </label>
+          <label className={styles.dialogField}>
             <span>Scoring</span>
             <select
               value={scoringLadder}
@@ -604,12 +629,13 @@ function NewGameDialog({ initial, onCancel, onStart }: NewGameDialogProps) {
 
 type PlayProps = {
   snapshot: GameSnapshot;
-  guesses: GuessRecord[];
+  guesses: LocalGuessRecord[];
+  myUserId: number;
   onGuess: (word: string) => Promise<GuessResponse>;
   onEndGame: () => void;
 };
 
-function PlayView({ snapshot, guesses, onGuess, onEndGame }: PlayProps) {
+function PlayView({ snapshot, guesses, myUserId, onGuess, onEndGame }: PlayProps) {
   return (
     <section className={styles.section}>
       <div className={styles.playHeader}>
@@ -636,8 +662,16 @@ function PlayView({ snapshot, guesses, onGuess, onEndGame }: PlayProps) {
           </div>
         </div>
         <div className={styles.rightCol}>
-          <BoardStats stats={snapshot.board_stats} guesses={guesses} />
-          <WordList guesses={guesses} className={styles.wordListCol} />
+          <BoardStats
+            stats={snapshot.board_stats}
+            guesses={guesses}
+            collaborative={snapshot.config.mode === "collaborative"}
+          />
+          <WordList
+            guesses={guesses}
+            myUserId={myUserId}
+            className={styles.wordListCol}
+          />
         </div>
       </div>
     </section>
