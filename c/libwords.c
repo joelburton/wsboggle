@@ -1,4 +1,3 @@
-#include <search.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
@@ -95,6 +94,49 @@ typedef struct {
     int len;
 } BoardWord;
 
+
+/****************************** HASH TABLE ***************************/
+
+/* Open-addressed table with linear probing, in place of tsearch's
+ * RB tree. Same role: dedup accepted words during the DFS. Reasons
+ * for the swap:
+ *
+ * - tsearch malloc'd an internal RB-tree node per insert and walked
+ *   the tree on every tdelete. With ~100 inserts per attempt and
+ *   ~90 attempts per board on the extreme profile, that was the
+ *   dominant cost the arena allocator couldn't reach.
+ *
+ * - A generation counter lets us "clear" the table between retries
+ *   by incrementing one int. No memset, no per-slot work.
+ *
+ * - Linear probing + FNV-1a is branchless inside the hot probe
+ *   loop, and the whole table fits in L1 on every 4×4/5×5 board
+ *   (at HT_SIZE = 4096, the table is 64 KB).
+ *
+ * The table has no removal path: ADD_FAIL in add_word doesn't
+ * commit (the reserved slot stays empty), so no tombstones ever
+ * appear and the probe loop stops at the first empty slot.
+ */
+
+#define HT_SIZE 4096
+#define HT_MASK (HT_SIZE - 1)
+
+typedef struct {
+    BoardWord *bw;     /* NULL if the slot's never been used */
+    uint32_t gen;      /* matches Board.ht_gen iff this slot is live */
+} HtSlot;
+
+/* FNV-1a 32-bit. Cheap, decent distribution on short ASCII words,
+ * no malloc anywhere. */
+static uint32_t fnv1a(const char *s, int len) {
+    uint32_t h = 0x811C9DC5u;
+    for (int i = 0; i < len; i++) {
+        h ^= (unsigned char) s[i];
+        h *= 0x01000193u;
+    }
+    return h;
+}
+
 // Maximum board size is 6x6
 typedef short Dice[36];
 
@@ -160,14 +202,52 @@ typedef struct Board {
     int min_longest;
     int max_longest;
     int min_legal;
-    void *legal;
     char **word_array;
     int num_words;
     int longest;
     int score;
     char *dice_simple;
-    Arena arena;   /* backs BoardWord structs + word strings */
+    Arena arena;        /* backs BoardWord structs + word strings */
+    HtSlot ht[HT_SIZE]; /* dedup table; cleared via ht_gen bump */
+    uint32_t ht_gen;
 } Board;
+
+/** Probe the table for ``word``. Returns the existing BoardWord
+ *  if it's already in the table, otherwise NULL and writes the
+ *  slot the caller should commit to (via ``ht_commit``). On NULL
+ *  the slot is "reserved" only in the sense that it sits at the
+ *  end of the probe chain — leaving it empty after a failed
+ *  budget check is safe, because subsequent lookups for the same
+ *  hash will also stop at the same empty slot. */
+static BoardWord *ht_find_or_reserve(
+    Board *b, const char *word, int length, HtSlot **slot_out)
+{
+    uint32_t i = fnv1a(word, length) & HT_MASK;
+    while (1) {
+        HtSlot *s = &b->ht[i];
+        if (s->gen != b->ht_gen) {
+            *slot_out = s;
+            return NULL;
+        }
+        if (strcmp(s->bw->word, word) == 0) {
+            return s->bw;
+        }
+        i = (i + 1) & HT_MASK;
+    }
+}
+
+static void ht_commit(Board *b, HtSlot *slot, BoardWord *bw) {
+    slot->bw = bw;
+    slot->gen = b->ht_gen;
+}
+
+/** Empty the table in O(1). Existing slots stay in memory but
+ *  their ``gen`` no longer matches, so probes treat them as
+ *  uninitialized. */
+static void ht_reset(Board *b) {
+    b->ht_gen++;
+}
+
 
 Board* make_board(
     char **set,
@@ -200,13 +280,17 @@ Board* make_board(
     b->min_legal = min_legal;
     b->score = 0;
     // Init the scratch fields so the first call to find_all_words
-    // (and our free_tree-on-retry) doesn't read uninitialized memory.
+    // doesn't read uninitialized memory.
     b->num_words = 0;
     b->longest = 0;
-    b->legal = NULL;
     b->word_array = NULL;
     b->dice_simple = NULL;
     arena_init(&b->arena, ARENA_BYTES);
+    // Zero the hash table once + start ht_gen at 1 so the initial
+    // slots' (zero) gen never matches the live gen. Subsequent
+    // retries only need to bump ht_gen, no memset.
+    memset(b->ht, 0, sizeof(b->ht));
+    b->ht_gen = 1;
     return b;
 }
 
@@ -255,15 +339,6 @@ void make_dice(Board *b) {
     }
     b->dice_simple[i] = '\0';
 }
-/** Compare board words using the actual word. */
-
-static int boardwords_cmp(const void *a,
-                          const void *b) {
-    const BoardWord *aa = a;
-    const BoardWord *bb = b;
-    return strcmp(aa->word, bb->word);
-}
-
 enum ADD_RESULT {
     ADD_ADDED,
     ADD_DUP,
@@ -282,37 +357,30 @@ enum ADD_RESULT {
 static enum ADD_RESULT add_word(
     Board *board, const char word[], const int length)
 {
-    // Both the struct and (eventually) the string come from the
-    // arena. On retry the whole arena resets; no per-word free()s.
-    BoardWord *b_word = arena_alloc(&board->arena, sizeof(BoardWord));
-    b_word->word = word;  // temporary: points to caller's stack buffer
-    b_word->found = false;
-    b_word->len = length;
+    HtSlot *slot;
+    if (ht_find_or_reserve(board, word, length, &slot) != NULL) {
+        return ADD_DUP;
+    }
 
-    BoardWord **found = tsearch(
-        b_word, (void **) &board->legal, boardwords_cmp);
-
-    // if already in tree, the just-allocated BoardWord becomes
-    // arena dead-weight until the next retry resets — small and
-    // bounded, so we leave it rather than burn a tfind walk first.
-    if (*found != b_word) return ADD_DUP;
-
-    // Tentative totals — if either bust the budget, back the
-    // insert out so the tree never holds a BoardWord whose
-    // ->word points to caller-stack memory (which goes away as
-    // soon as find_all_words returns and we retry).
+    // Tentative totals — if either bust the budget, we just don't
+    // commit the slot. The probe stopped at this empty slot and
+    // will keep stopping there for any future caller (which, on a
+    // failed attempt, there isn't — find_all_words bails on
+    // ADD_FAIL and the next retry bumps ht_gen).
     const int new_count = board->num_words + 1;
     const int new_score = board->score + board->score_counts[length];
     if (new_count > board->max_words || new_score > board->max_score) {
-        tdelete(b_word, (void **) &board->legal, boardwords_cmp);
         return ADD_FAIL;
     }
 
-    // Commit: stable copy of the word string into the arena +
-    // budget update. The arena copy is byte-equal to the original,
-    // so the tree's ordering invariant (string compare on ->word)
-    // is preserved when we swap the pointer.
+    // Commit: stable arena copy of the word, BoardWord struct,
+    // hash-table slot, budget update.
+    BoardWord *b_word = arena_alloc(&board->arena, sizeof(BoardWord));
     b_word->word = arena_strdup(&board->arena, word, length);
+    b_word->found = false;
+    b_word->len = length;
+
+    ht_commit(board, slot, b_word);
     board->num_words = new_count;
     board->score = new_score;
     if (length > board->longest) board->longest = length;
@@ -480,107 +548,33 @@ int fill_board(Board *board, int max_tries){
 }
 
 
-/* The tree-walk machinery is platform-split: glibc's twalk_r passes
- * a user-data pointer; BSD/macOS twalk doesn't, so the callback has
- * to read from a file-scope global. Single-threaded usage (the GIL
- * serializes our get_words calls) means the global is safe. */
-
-struct CollectBws {
-    BoardWord **bws;   // every BoardWord in the tree, in walk order
-    int marker;
-};
-
-#if __linux__
-static void collect_bws_cb(const void *n, const VISIT value, void *data) {
-    if (value == leaf || value == postorder) {
-        struct CollectBws *c = data;
-        c->bws[c->marker++] = *(BoardWord **)n;
-    }
-}
-
-static void collect_bws(Board *board, BoardWord **out) {
-    struct CollectBws c = {out, 0};
-    twalk_r(board->legal, collect_bws_cb, &c);
-}
-#else
-static struct CollectBws *collect_bws_cur;
-static void collect_bws_cb(const void *n, const VISIT value, int depth) {
-    (void)depth;
-    if (value == leaf || value == postorder) {
-        collect_bws_cur->bws[collect_bws_cur->marker++] = *(BoardWord **)n;
-    }
-}
-
-static void collect_bws(Board *board, BoardWord **out) {
-    struct CollectBws c = {out, 0};
-    collect_bws_cur = &c;
-    twalk(board->legal, collect_bws_cb);
-    collect_bws_cur = NULL;
-}
-#endif
-
-/** Drain a board's legal-word tree.
+/** Reset the dedup table + arena between rejection-sampler retries.
  *
- * Used in two places with the same shape — collect every
- * BoardWord, ``tdelete`` each so tsearch releases its internal
- * RB-tree node. The BoardWord structs and word strings live in
- * the arena, so we don't ``free`` them here; the caller decides
- * whether to ``arena_reset`` after draining (find_all_words
- * does; bws_btree_to_array doesn't, because word_array's pointers
- * still reference the strings).
- *
- * The temp BoardWord** scratch is a system-malloc rather than an
- * arena alloc — find_all_words is about to reset the arena, so
- * arena-allocating the scratch would invalidate it mid-loop.
+ * Both are O(1): ht_reset bumps a generation counter so live slots
+ * stop matching, arena_reset rewinds a bump pointer. The
+ * BoardWords + word strings they held simply stop existing.
  */
-
-static void drain_tree(Board *board) {
-    if (board->legal == NULL || board->num_words == 0) {
-        board->legal = NULL;
-        return;
-    }
-    BoardWord **bws = malloc((size_t) board->num_words * sizeof(BoardWord *));
-    collect_bws(board, bws);
-
-    for (int i = 0; i < board->num_words; i++) {
-        tdelete(bws[i], (void **) &board->legal, boardwords_cmp);
-    }
-    free(bws);
-    board->legal = NULL;
-}
-
-/* Backwards-compatible alias for the one call site that still uses
- * the old name (the forward declaration up top). Behavior matches
- * "drain tree, then arena_reset" — which is what find_all_words
- * wants. */
 static void free_tree(Board *board, bool unused) {
     (void) unused;
-    drain_tree(board);
+    ht_reset(board);
     arena_reset(&board->arena);
 }
 
-/** Populate ``board->word_array`` (a fresh system-malloc) with the
- *  arena-resident word strings, then drain the tree. Critically we
- *  do NOT reset the arena here — the word_array's pointers point
- *  into the arena, and Python needs to read them before
- *  free_words tears it down.
- */
+/** Walk the hash buckets once, copying each live entry's
+ *  arena-resident word pointer into a freshly malloc'd
+ *  ``word_array``. Python reads through that array before
+ *  ``free_words`` tears the arena down. */
 
 void bws_btree_to_array(Board *board) {
     board->word_array = malloc(((size_t) board->num_words + 1) * sizeof(char *));
-    BoardWord **bws = malloc((size_t) board->num_words * sizeof(BoardWord *));
-    collect_bws(board, bws);
-
-    for (int i = 0; i < board->num_words; i++) {
-        BoardWord *bw = bws[i];
-        // word_array borrows a pointer into the arena; Python
-        // reads it before the arena is freed in free_words.
-        board->word_array[i] = (char *) bw->word;
-        tdelete(bw, (void **) &board->legal, boardwords_cmp);
+    int n = 0;
+    for (int i = 0; i < HT_SIZE; i++) {
+        HtSlot *s = &board->ht[i];
+        if (s->gen == board->ht_gen) {
+            board->word_array[n++] = (char *) s->bw->word;
+        }
     }
-    board->word_array[board->num_words] = NULL;
-    free(bws);
-    board->legal = NULL;
+    board->word_array[n] = NULL;
 }
 
 char **get_words(
