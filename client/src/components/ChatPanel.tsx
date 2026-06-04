@@ -194,7 +194,7 @@ export function ChatPanel({
   );
 }
 
-// --- Closed-state indicator (the reopen affordance) ---------------------
+// --- Always-visible chat indicator --------------------------------------
 
 type IndicatorProps = {
   unreadCount: number;
@@ -203,27 +203,40 @@ type IndicatorProps = {
    *  ``null`` when there's nothing unread; the button stays a
    *  subtle gray in that case. */
   unreadColor: string | null;
-  onOpen: () => void;
+  /** Whether the chat panel is currently open. The indicator
+   *  stays visible either way; when open it gets a subtle outline
+   *  and clicking it closes the panel. */
+  open: boolean;
+  onToggle: () => void;
 };
 
 const SUBTLE = "#d0d0d0";
 
-/** Circular floating button in the bottom-right that re-opens the
- *  floating chat. Ported from crossplay's :class:`ChatIndicator`:
- *  a subtle-gray speech-bubble when there's nothing new, the most
- *  recent unread sender's color (with a red count badge) when
- *  there is. Pressing "/" anywhere outside an input also opens the
- *  panel (see :class:`ClubPage`). */
-export function ChatIndicator({ unreadCount, unreadColor, onOpen }: IndicatorProps) {
+/** Circular floating button in the bottom-right that toggles the
+ *  chat panel. Ported from crossplay's :class:`ChatIndicator`:
+ *  always visible, subtle-gray speech-bubble when there's nothing
+ *  new, most-recent unread sender's color (with a red count badge)
+ *  when there is, an outline ring when the panel is open.
+ *  Pressing "/" anywhere outside an input also opens the panel
+ *  (see :class:`ClubPage`). */
+export function ChatIndicator({
+  unreadCount,
+  unreadColor,
+  open,
+  onToggle,
+}: IndicatorProps) {
   const showColor = unreadCount > 0 && unreadColor ? unreadColor : SUBTLE;
-  const ariaLabel =
-    unreadCount > 0 ? `Open chat (${unreadCount} unread)` : "Open chat";
+  const ariaLabel = open
+    ? "Close chat"
+    : unreadCount > 0
+      ? `Open chat (${unreadCount} unread)`
+      : "Open chat";
   return (
     <button
       type="button"
-      className={styles.indicator}
+      className={`${styles.indicator} ${open ? styles.indicatorOpen : ""}`}
       style={{ background: showColor }}
-      onClick={onOpen}
+      onClick={onToggle}
       aria-label={ariaLabel}
     >
       <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">

@@ -242,24 +242,31 @@ export function ClubPage({ clubId, me }: Props) {
         )}
       </div>
 
-      {chatLayout === "floating" && chatOpen && (
-        <FloatingChatPanel
-          myHandle={me.user.handle}
-          messages={state.chat}
-          feedback={state.feedback}
-          onSend={sendChat}
-          onClose={() => setChatOpen(false)}
-          onDismissFeedback={dismissFeedback}
-          disabled={!state.connected}
-          inputRef={floatingInputRef}
-        />
-      )}
-      {chatLayout === "floating" && !chatOpen && (
-        <ChatIndicator
-          unreadCount={unreadCount}
-          unreadColor={unreadColor}
-          onOpen={() => setChatOpen(true)}
-        />
+      {chatLayout === "floating" && (
+        <>
+          {chatOpen && (
+            <FloatingChatPanel
+              myHandle={me.user.handle}
+              messages={state.chat}
+              feedback={state.feedback}
+              onSend={sendChat}
+              onClose={() => setChatOpen(false)}
+              onDismissFeedback={dismissFeedback}
+              disabled={!state.connected}
+              inputRef={floatingInputRef}
+            />
+          )}
+          {/* Indicator stays visible whether the panel is open or
+              closed — clicking it toggles. While open, unreadCount
+              is forced to 0 by the seenChatId effect, so the
+              indicator naturally goes subtle + no badge. */}
+          <ChatIndicator
+            unreadCount={unreadCount}
+            unreadColor={unreadColor}
+            open={chatOpen}
+            onToggle={() => setChatOpen((o) => !o)}
+          />
+        </>
       )}
     </div>
   );
