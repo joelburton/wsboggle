@@ -102,6 +102,26 @@ PROFILES = {
         min_longest=10,
         description="5×5, rejection-heavy; bigger payload + many retries",
     ),
+    "long10": Profile(
+        name="long10",
+        dice_set="4",
+        min_longest=10,
+        description="4×4 with a 10-letter word; hundreds of attempts each",
+    ),
+    "long11": Profile(
+        name="long11",
+        dice_set="5",
+        min_longest=11,
+        description="5×5 with an 11-letter word; thousands of attempts",
+    ),
+    "brutal": Profile(
+        name="brutal",
+        dice_set="4",
+        min_words=140,
+        min_longest=10,
+        min_score=300,
+        description="4×4 word-rich + a 10-letter word; the worst case",
+    ),
 }
 
 

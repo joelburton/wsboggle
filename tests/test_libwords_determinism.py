@@ -35,6 +35,9 @@ EXPECTED_FINGERPRINTS = {
     "extreme":   "054b4602b27771e0",
     "5x5-loose": "5654139ede1c0112",
     "5x5-tight": "25c501d9bf04400e",
+    "long10":    "3f2a2aaea26c82df",
+    "long11":    "98af29e58decf784",
+    "brutal":    "aeaa55e33b6164c0",
 }
 
 
