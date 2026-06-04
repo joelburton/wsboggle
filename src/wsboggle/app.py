@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from wsboggle import (
     auth_routes,
     club_routes,
+    club_ws,
     db,
     dict_routes,
     game_routes,
@@ -46,6 +47,7 @@ app.include_router(club_routes.router)
 app.include_router(solo_routes.router)
 app.include_router(game_routes.router)
 app.include_router(dict_routes.router)
+app.include_router(club_ws.router)
 
 
 @app.get("/api/health")

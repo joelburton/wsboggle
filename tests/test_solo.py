@@ -132,8 +132,8 @@ def test_guess_legal_word(client: TestClient, db: sqlite3.Connection) -> None:
     assert body["word"] == word.lower()
 
 
-def test_guess_not_in_dictionary(client: TestClient, db: sqlite3.Connection) -> None:
-    """A nonsense word comes back 'not_in_dictionary' with 0 points."""
+def test_guess_not_a_word(client: TestClient, db: sqlite3.Connection) -> None:
+    """A nonsense word comes back 'not_a_word' with 0 points."""
     _seed_invite(db)
     _register(client)
     snap = _start_solo(client)
@@ -142,7 +142,22 @@ def test_guess_not_in_dictionary(client: TestClient, db: sqlite3.Connection) -> 
         f"/api/solo/games/{snap['game_id']}/guess", json={"word": "zzzqqq"}
     )
     assert resp.status_code == 200
-    assert resp.json()["result"] == "not_in_dictionary"
+    assert resp.json()["result"] == "not_a_word"
+    assert resp.json()["points"] == 0
+
+
+def test_guess_too_short(client: TestClient, db: sqlite3.Connection) -> None:
+    """A real two-letter word comes back 'too_short' under the
+    default min_legal_length of 3."""
+    _seed_invite(db)
+    _register(client)
+    snap = _start_solo(client)
+
+    resp = client.post(
+        f"/api/solo/games/{snap['game_id']}/guess", json={"word": "do"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["result"] == "too_short"
     assert resp.json()["points"] == 0
 
 
@@ -181,8 +196,10 @@ def test_guess_non_letters_rejected(
     assert resp.status_code == 400
 
 
-def test_guess_too_short_rejected(client: TestClient, db: sqlite3.Connection) -> None:
-    """Words shorter than min_legal_length are 400."""
+def test_guess_too_short_classified(client: TestClient, db: sqlite3.Connection) -> None:
+    """Words shorter than min_legal_length come back 200 with
+    ``result="too_short"`` so the client can render distinct
+    feedback. The row is still recorded (illegal)."""
     _seed_invite(db)
     _register(client)
     snap = _start_solo(client)
@@ -190,7 +207,8 @@ def test_guess_too_short_rejected(client: TestClient, db: sqlite3.Connection) ->
     resp = client.post(
         f"/api/solo/games/{snap['game_id']}/guess", json={"word": "ab"}
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 200
+    assert resp.json()["result"] == "too_short"
 
 
 def test_guess_on_others_game_404(client: TestClient, db: sqlite3.Connection) -> None:

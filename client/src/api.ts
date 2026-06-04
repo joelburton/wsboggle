@@ -12,6 +12,7 @@
  */
 
 import type {
+  ClubGameSummary,
   ClubSummary,
   CreateClubRequest,
   DefineResponse,
@@ -67,7 +68,9 @@ export const api = {
   logout:   ()                    => post<{ ok: boolean }>("/api/auth/logout"),
 
   // Clubs
-  createClub: (body: CreateClubRequest) => post<ClubSummary>("/api/clubs", body),
+  createClub:    (body: CreateClubRequest) => post<ClubSummary>("/api/clubs", body),
+  listClubGames: (clubId: number) =>
+    get<ClubGameSummary[]>(`/api/clubs/${clubId}/games`),
 
   // Solo
   startSolo: (config: GameConfig) => post<GameSnapshot>("/api/solo/games", { config }),

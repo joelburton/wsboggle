@@ -7,7 +7,8 @@
  *   /register      → register
  *   /solo          → new solo game (config dialog)
  *   /solo/:id      → solo play (in-game + results)
- *   /c/:id         → club page (not built in v1 milestone)
+ *   /clubs/new     → create-club form
+ *   /c/:id         → club page (lobby; in-game once game flow lands)
  *   /games/:id     → game review (not built in v1 milestone)
  *
  * `useRoute` subscribes to popstate so back/forward and our own
@@ -23,6 +24,7 @@ export type Route =
   | { kind: "register" }
   | { kind: "solo-new" }
   | { kind: "solo-play"; gameId: number }
+  | { kind: "club-new" }
   | { kind: "club"; clubId: number }
   | { kind: "review"; gameId: number }
   | { kind: "not-found" };
@@ -32,6 +34,7 @@ export function parsePath(path: string): Route {
   if (path === "/login")            return { kind: "login" };
   if (path === "/register")         return { kind: "register" };
   if (path === "/solo")             return { kind: "solo-new" };
+  if (path === "/clubs/new")        return { kind: "club-new" };
 
   let m: RegExpMatchArray | null;
   if ((m = path.match(/^\/solo\/(\d+)$/)))   return { kind: "solo-play", gameId: Number(m[1]) };

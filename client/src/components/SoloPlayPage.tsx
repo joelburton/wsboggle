@@ -48,7 +48,7 @@ type PageState =
   | { kind: "ended"; snapshot: GameSnapshot; result: GameResult }
   | { kind: "error"; message: string };
 
-export function SoloPlayPage({ gameId }: Props) {
+export function SoloPlayPage({ gameId, me }: Props) {
   const [state, setState] = useState<PageState>({ kind: "loading" });
 
   // Load on mount.
@@ -132,7 +132,7 @@ export function SoloPlayPage({ gameId }: Props) {
   if (state.kind === "ended") {
     return (
       <div className={styles.wrapper}>
-        <GameResultPanel result={state.result} />
+        <GameResultPanel result={state.result} viewerUserId={me.user.id} />
       </div>
     );
   }

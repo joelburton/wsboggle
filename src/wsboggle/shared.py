@@ -16,7 +16,7 @@ alias overhead). The TS mirror uses the same names.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, Field
 
@@ -191,10 +191,20 @@ class GuessRequest(BaseModel):
 
 GuessResult = Literal[
     "accepted",
-    "not_in_dictionary",
+    "too_short",       # real word but below ``min_legal_length``
+    "not_on_board",    # real word per the dictionary, but not findable on this board
+    "not_a_word",      # not in the dictionary at all
     "already_submitted",
     "game_inactive",
 ]
+"""Finer-grained than just "legal vs not": the three illegal-but-
+recorded outcomes (``too_short`` / ``not_on_board`` / ``not_a_word``)
+all show up struck through in the player's word list, but the UI
+renders different immediate feedback under the entry box ("too
+short" vs "not on board" vs "not a word"). Distinguishing them
+needs the dictionary; when the dictionary file isn't installed
+(some tests), every non-board word falls back to ``not_a_word``.
+"""
 
 
 class GuessResponse(BaseModel):
@@ -332,18 +342,207 @@ class DefineResponse(BaseModel):
 
 
 # --- WS message envelopes -------------------------------------------------
-# TODO(ws): stubs only — replace these with discriminated unions on a
-# ``type`` field once the WS handlers exist. The catalog in CLAUDE.md
-# (§ Wire protocol) is the spec.
+# Discriminated unions on a ``type`` literal — Pydantic dispatches to the
+# right subclass on parse. The TS mirror uses the same shape so the
+# client can switch on `msg.type`.
+#
+# This slice covers the lobby surface (chat + presence). The game-flow
+# messages from CLAUDE.md (`gameStarted`, `guessAccepted`,
+# `guessSubmitted`, `guessRejected`, `gameEnded`, the client-side
+# `guess`, `newGame`, `endGame`) get added when the multiplayer game
+# loop lands.
 
 
-class ClientMessage(BaseModel):
-    """TODO(ws): base for everything the client sends over WS."""
-
-    type: str = Field(..., description="Message discriminator")
+# --- Lobby payload pieces -------------------------------------------------
 
 
-class ServerMessage(BaseModel):
-    """TODO(ws): base for everything the server sends over WS."""
+class ClubMember(BaseModel):
+    """One member of a club as it appears in ``clubState``.
 
-    type: str = Field(..., description="Message discriminator")
+    ``online`` is computed at snapshot time from the WS registry —
+    whoever is currently connected to this club's socket counts as
+    in-club. Mirrors the *in club* presence semantic from CLAUDE.md
+    (not "authenticated to the server").
+    """
+
+    user_id: int
+    handle: str
+    online: bool
+
+
+class ChatMessage(BaseModel):
+    """A persisted chat line. ``id`` is the DB rowid so the client
+    can dedupe and order; ``ts`` is server-stamped."""
+
+    id: int
+    user_id: int
+    handle: str
+    text: str
+    ts: str
+
+
+# --- Client → server ------------------------------------------------------
+
+
+class CHello(BaseModel):
+    """Handshake the client sends right after the socket opens.
+
+    Currently carries no fields — auth already happened on the HTTP
+    handshake (the session cookie). Reserved as an extension point
+    (resume tokens, client version, etc.)."""
+
+    type: Literal["hello"] = "hello"
+
+
+class CChat(BaseModel):
+    """One chat line from the user. Server stamps id + timestamp."""
+
+    type: Literal["chat"] = "chat"
+    text: str
+
+
+class CNewGame(BaseModel):
+    """Request to start a new game. Server validates that all
+    members are currently in-club and that no game is already
+    active before persisting + broadcasting ``gameStarted``."""
+
+    type: Literal["newGame"] = "newGame"
+    config: "GameConfig"
+
+
+class CGuess(BaseModel):
+    """One word submission. The server replies with ``guessAccepted``
+    or ``guessRejected`` privately to the sender (competitive mode);
+    nothing about the guess is broadcast to other members during
+    the timer."""
+
+    type: Literal["guess"] = "guess"
+    word: str
+
+
+ClientMessage = Annotated[
+    Union[CHello, CChat, CNewGame, CGuess],
+    Field(discriminator="type"),
+]
+"""Everything the client can send over the club WS in this
+milestone. Manual ``endGame`` (only meaningful when ``timer_seconds``
+is null) lands when v2 exposes untimed games in the UI."""
+
+
+# --- Server → client ------------------------------------------------------
+
+
+class SClubState(BaseModel):
+    """Full snapshot sent right after the socket opens.
+
+    Replays every chat line so a freshly-connected client doesn't
+    need a separate REST fetch. ``members`` carries presence as of
+    the moment this snapshot was assembled — subsequent changes
+    flow as ``memberPresence`` deltas.
+
+    ``current_game`` is populated when a game is currently active
+    in the club: a mid-game reconnect (refresh, dropped socket) gets
+    enough to render the play view immediately. The snapshot is
+    per-viewer — ``your_guesses`` reflects only the connecting
+    user's own submissions (competitive privacy).
+    """
+
+    type: Literal["clubState"] = "clubState"
+    club_id: int
+    name: str
+    members: list[ClubMember]
+    chat: list[ChatMessage]
+    current_game: "GameSnapshot | None" = None
+
+
+class SChatMessage(BaseModel):
+    """Incremental chat broadcast — one of these per accepted
+    ``chat`` from any member."""
+
+    type: Literal["chatMessage"] = "chatMessage"
+    message: ChatMessage
+
+
+class SMemberPresence(BaseModel):
+    """Presence delta: one member just connected or disconnected.
+
+    Broadcast to every other member's socket. The connector
+    themselves learns their own state from the ``clubState`` snapshot.
+    """
+
+    type: Literal["memberPresence"] = "memberPresence"
+    user_id: int
+    online: bool
+
+
+class SFeedback(BaseModel):
+    """Short toast — used for non-fatal errors that the client
+    should surface (e.g. "chat too long"). Distinct from socket
+    close: feedback keeps the socket open."""
+
+    type: Literal["feedback"] = "feedback"
+    text: str
+    level: Literal["info", "warn", "error"] = "info"
+
+
+class SGameStarted(BaseModel):
+    """A new game has been started for this club. Broadcast to
+    every member's socket; each viewer reads ``snapshot.your_guesses``
+    (always empty here) for their own list."""
+
+    type: Literal["gameStarted"] = "gameStarted"
+    snapshot: "GameSnapshot"
+
+
+class SGuessAccepted(BaseModel):
+    """The server recorded one of your guesses. Sent **only to the
+    submitting socket** in competitive mode — other members see
+    nothing about the guess during the timer (classic Boggle
+    privacy).
+
+    Mirrors the solo HTTP ``GuessResponse``: ``result`` is one of
+    ``accepted`` / ``too_short`` / ``not_on_board`` / ``not_a_word``
+    so the client renders distinct feedback under the entry box.
+    The legality flag in the word-list history is derived as
+    ``result == "accepted"``.
+    """
+
+    type: Literal["guessAccepted"] = "guessAccepted"
+    word: str
+    points: int
+    result: Literal["accepted", "too_short", "not_on_board", "not_a_word"]
+
+
+class SGuessRejected(BaseModel):
+    """The server rejected one of your guesses. Sent only to the
+    submitting socket. ``reason`` mirrors :data:`GuessResult`
+    minus ``accepted``."""
+
+    type: Literal["guessRejected"] = "guessRejected"
+    word: str
+    reason: Literal["already_submitted", "game_inactive"]
+
+
+class SGameEnded(BaseModel):
+    """The current game has ended — timer expired (v1) or a
+    manual end fired (v2). Broadcast to every member; carries the
+    full end-of-game result with all players' word lists revealed."""
+
+    type: Literal["gameEnded"] = "gameEnded"
+    result: "GameResult"
+
+
+ServerMessage = Annotated[
+    Union[
+        SClubState,
+        SChatMessage,
+        SMemberPresence,
+        SFeedback,
+        SGameStarted,
+        SGuessAccepted,
+        SGuessRejected,
+        SGameEnded,
+    ],
+    Field(discriminator="type"),
+]
+"""Everything the server sends over the club WS."""

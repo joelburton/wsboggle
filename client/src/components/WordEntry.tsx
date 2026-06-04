@@ -83,14 +83,25 @@ export function WordEntry({ onSubmit, disabled, className, feedbackClassName }: 
 
     try {
       const res = await onSubmit(w);
-      if (res.result === "accepted") {
-        setFeedback({ text: `${w}: +${res.points}`, tone: "good" });
-      } else if (res.result === "already_submitted") {
-        setFeedback({ text: `${w}: already submitted`, tone: "warn" });
-      } else if (res.result === "game_inactive") {
-        setFeedback({ text: "game's over", tone: "warn" });
-      } else {
-        setFeedback({ text: `${w}: not a word`, tone: "bad" });
+      switch (res.result) {
+        case "accepted":
+          setFeedback({ text: `${w}: +${res.points}`, tone: "good" });
+          break;
+        case "too_short":
+          setFeedback({ text: `${w}: too short`, tone: "bad" });
+          break;
+        case "not_on_board":
+          setFeedback({ text: `${w}: not on board`, tone: "bad" });
+          break;
+        case "not_a_word":
+          setFeedback({ text: `${w}: not a word`, tone: "bad" });
+          break;
+        case "already_submitted":
+          setFeedback({ text: `${w}: already submitted`, tone: "warn" });
+          break;
+        case "game_inactive":
+          setFeedback({ text: "game's over", tone: "warn" });
+          break;
       }
     } catch {
       setFeedback({ text: "error submitting", tone: "bad" });

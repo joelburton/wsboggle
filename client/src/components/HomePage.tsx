@@ -1,5 +1,5 @@
 import { api } from "../api";
-import { navigate } from "../routing";
+import { Link, navigate } from "../routing";
 import type { MeResponse } from "../shared";
 import styles from "./HomePage.module.css";
 
@@ -45,17 +45,27 @@ export function HomePage({ me, onLogout }: Props) {
       </p>
 
       <section className={styles.clubs}>
-        <h2>Your clubs</h2>
+        <div className={styles.clubsHeader}>
+          <h2>Your clubs</h2>
+          <button className="secondary" onClick={() => navigate("/clubs/new")}>
+            + New club
+          </button>
+        </div>
         {me.clubs.length === 0 ? (
           <p className={styles.empty}>
-            No clubs yet — multiplayer is coming.
+            No clubs yet — make one above to play with friends.
           </p>
         ) : (
-          <ul>
+          <ul className={styles.clubList}>
             {me.clubs.map((c) => (
               <li key={c.id}>
-                {c.name} ({c.member_handles.join(", ")}) — {c.game_count} game
-                {c.game_count === 1 ? "" : "s"}
+                <Link to={`/c/${c.id}`} className={styles.clubLink}>
+                  <strong>{c.name}</strong>
+                  <span className={styles.clubMeta}>
+                    {c.member_handles.join(", ")} · {c.game_count} game
+                    {c.game_count === 1 ? "" : "s"}
+                  </span>
+                </Link>
               </li>
             ))}
           </ul>

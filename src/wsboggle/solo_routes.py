@@ -87,9 +87,10 @@ def submit_solo_guess(
     """Submit one guess.
 
     Auto-ends the game (and returns 410) if the timer has elapsed —
-    the client may have lost the race. Words are required to be
-    ASCII letters; length is validated against the game's
-    ``min_legal_length``.
+    the client may have lost the race. The word must be ASCII
+    letters; all other failure modes (too short, not on board, not
+    a word) come back as a ``GuessResponse`` with the corresponding
+    ``result`` code, not an HTTP error.
     """
     state = _load_owned_solo_game(db, game_id, user.id)
 
@@ -102,10 +103,6 @@ def submit_solo_guess(
     raw = body.word.strip()
     if not raw.isalpha() or not raw.isascii():
         raise HTTPException(400, "word must be letters only")
-    if len(raw) < state.config.min_legal_length:
-        raise HTTPException(
-            400, f"word must be at least {state.config.min_legal_length} letters"
-        )
 
     outcome = games.submit_guess(db, state, user_id=user.id, word=raw)
     if outcome.result == "game_inactive":

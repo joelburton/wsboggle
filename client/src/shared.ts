@@ -99,7 +99,9 @@ export type GuessRequest = {
 
 export type GuessResult =
   | "accepted"
-  | "not_in_dictionary"
+  | "too_short"      // real word but below the game's min length
+  | "not_on_board"   // real word but no path on this board
+  | "not_a_word"     // not in the dictionary at all
   | "already_submitted"
   | "game_inactive";
 
@@ -178,7 +180,98 @@ export type DefineResponse = {
   definition: string | null;
 };
 
-// --- WS message envelopes (placeholders) ---------------------------------
+// --- WS message envelopes ------------------------------------------------
+// Discriminated unions on the `type` field; same shape as the Pydantic
+// models in ``src/wsboggle/shared.py``. Game-flow messages
+// (gameStarted / guess* / gameEnded etc.) get added when the
+// multiplayer game loop lands.
 
-export type ClientMessage = { type: string };
-export type ServerMessage = { type: string };
+// Lobby payload pieces
+
+export type ClubMember = {
+  user_id: number;
+  handle: string;
+  /** Currently connected to this club's socket. */
+  online: boolean;
+};
+
+export type ChatMessage = {
+  id: number;
+  user_id: number;
+  handle: string;
+  text: string;
+  ts: string;
+};
+
+// Client → server
+
+export type CHello = { type: "hello" };
+export type CChat = { type: "chat"; text: string };
+export type CNewGame = { type: "newGame"; config: GameConfig };
+export type CGuess = { type: "guess"; word: string };
+export type ClientMessage = CHello | CChat | CNewGame | CGuess;
+
+// Server → client
+
+export type SClubState = {
+  type: "clubState";
+  club_id: number;
+  name: string;
+  members: ClubMember[];
+  chat: ChatMessage[];
+  /** Populated when a game is currently active; per-viewer
+   *  `your_guesses` for the connecting user. */
+  current_game: GameSnapshot | null;
+};
+
+export type SChatMessage = {
+  type: "chatMessage";
+  message: ChatMessage;
+};
+
+export type SMemberPresence = {
+  type: "memberPresence";
+  user_id: number;
+  online: boolean;
+};
+
+export type SFeedback = {
+  type: "feedback";
+  text: string;
+  level: "info" | "warn" | "error";
+};
+
+export type SGameStarted = {
+  type: "gameStarted";
+  snapshot: GameSnapshot;
+};
+
+export type SGuessAccepted = {
+  type: "guessAccepted";
+  word: string;
+  points: number;
+  /** Same four-way classification as the solo HTTP `GuessResponse`.
+   *  Derive `is_legal` as `result === "accepted"` when needed. */
+  result: "accepted" | "too_short" | "not_on_board" | "not_a_word";
+};
+
+export type SGuessRejected = {
+  type: "guessRejected";
+  word: string;
+  reason: "already_submitted" | "game_inactive";
+};
+
+export type SGameEnded = {
+  type: "gameEnded";
+  result: GameResult;
+};
+
+export type ServerMessage =
+  | SClubState
+  | SChatMessage
+  | SMemberPresence
+  | SFeedback
+  | SGameStarted
+  | SGuessAccepted
+  | SGuessRejected
+  | SGameEnded;

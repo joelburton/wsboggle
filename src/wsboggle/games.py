@@ -27,7 +27,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from wsboggle import dice, libwords, scoring
+from wsboggle import dice, dictionary, libwords, scoring
 from wsboggle.shared import (
     ClubGameSummary,
     GameConfig,
@@ -146,6 +146,28 @@ def find_game(db: sqlite3.Connection, game_id: int) -> GameState | None:
         "SELECT id, club_id, created_by, config, board, legal_words, "
         "started_at, ends_at, ended_at FROM games WHERE id = ?",
         (game_id,),
+    ).fetchone()
+    return None if row is None else _row_to_state(row)
+
+
+def find_active_club_game(
+    db: sqlite3.Connection, club_id: int
+) -> GameState | None:
+    """The currently-active game for one club, if any.
+
+    "Active" = ``ended_at IS NULL`` — the live one, regardless of
+    whether the timer has elapsed. Callers should also call
+    :func:`is_active` if they need to distinguish "running" from
+    "timer past but ``gameEnded`` not yet broadcast". The
+    multiplayer WS uses this on connect to populate
+    ``clubState.current_game`` for mid-game reconnects.
+    """
+    row = db.execute(
+        "SELECT id, club_id, created_by, config, board, legal_words, "
+        "started_at, ends_at, ended_at FROM games "
+        "WHERE club_id = ? AND ended_at IS NULL "
+        "ORDER BY id DESC LIMIT 1",
+        (club_id,),
     ).fetchone()
     return None if row is None else _row_to_state(row)
 
@@ -276,10 +298,23 @@ def submit_guess(
         # constraint is the source of truth; treat as a duplicate.
         return GuessOutcome(result="already_submitted", points=0)
 
-    if not is_legal:
-        return GuessOutcome(result="not_in_dictionary", points=0)
-    points = scoring.score_word(normalized, game.config.scoring_ladder)
-    return GuessOutcome(result="accepted", points=points)
+    if is_legal:
+        points = scoring.score_word(normalized, game.config.scoring_ladder)
+        return GuessOutcome(result="accepted", points=points)
+
+    # Illegal — classify so the client can show the right hint.
+    # Length comes first because it's the cheapest check and is a
+    # cleaner UX message than "not on board" for a 2-letter real word.
+    if len(normalized) < game.config.min_legal_length:
+        return GuessOutcome(result="too_short", points=0)
+    # Dictionary lookup distinguishes "real word, just not on this
+    # board" from "not a word at all". When the dictionary file
+    # isn't installed (some test envs) ``define`` returns None for
+    # everything; everything illegal collapses to ``not_a_word``,
+    # which is the same imprecise feedback we had before.
+    if dictionary.define(normalized) is not None:
+        return GuessOutcome(result="not_on_board", points=0)
+    return GuessOutcome(result="not_a_word", points=0)
 
 
 def end_game(db: sqlite3.Connection, game: GameState) -> GameState:

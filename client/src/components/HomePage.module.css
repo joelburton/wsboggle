@@ -22,13 +22,50 @@
   padding: 0.75rem 1.5rem;
 }
 
+.clubsHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: 2rem;
+}
+
 .clubs h2 {
   font-size: 1.1rem;
   color: #374151;
-  margin-top: 2rem;
+  margin: 0;
 }
 
 .empty {
   color: #6b7280;
   font-style: italic;
+}
+
+.clubList {
+  list-style: none;
+  padding: 0;
+  margin: 0.75rem 0 0 0;
+}
+
+.clubList li {
+  margin: 0;
+  padding: 0;
+}
+
+.clubLink {
+  display: block;
+  padding: 0.6rem 0.75rem;
+  border-radius: 6px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.clubLink:hover {
+  background: #f3f4f6;
+}
+
+.clubMeta {
+  display: block;
+  font-size: 0.85rem;
+  color: #6b7280;
+  margin-top: 0.15rem;
 }

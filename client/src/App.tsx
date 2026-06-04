@@ -21,6 +21,8 @@ import { RegisterPage } from "./components/RegisterPage";
 import { HomePage } from "./components/HomePage";
 import { NewSoloGamePage } from "./components/NewSoloGamePage";
 import { SoloPlayPage } from "./components/SoloPlayPage";
+import { NewClubPage } from "./components/NewClubPage";
+import { ClubPage } from "./components/ClubPage";
 
 type AuthState =
   | { kind: "loading" }
@@ -72,10 +74,13 @@ export function App() {
       return <NewSoloGamePage />;
     case "solo-play":
       return <SoloPlayPage gameId={route.gameId} me={auth.me} />;
+    case "club-new":
+      return <NewClubPage me={auth.me} />;
+    case "club":
+      return <ClubPage clubId={route.clubId} me={auth.me} />;
     case "login":
     case "register":
       return null; // redirect effect handles this
-    case "club":
     case "review":
     case "not-found":
     default:
