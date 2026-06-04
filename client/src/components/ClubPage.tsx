@@ -520,13 +520,6 @@ type PlayProps = {
 };
 
 function PlayView({ snapshot, guesses, onGuess, onEndGame }: PlayProps) {
-  const [confirmEnd, setConfirmEnd] = useState(false);
-  // Reset confirm state when the active game changes (e.g. a new
-  // round started after this one ended).
-  useEffect(() => {
-    setConfirmEnd(false);
-  }, [snapshot.game_id]);
-
   return (
     <section className={styles.section}>
       <div className={styles.playHeader}>
@@ -542,27 +535,9 @@ function PlayView({ snapshot, guesses, onGuess, onEndGame }: PlayProps) {
             <WordEntry onSubmit={onGuess} />
           </div>
           <div className={styles.endRow}>
-            {confirmEnd ? (
-              <>
-                <span className={styles.confirmText}>
-                  End the game for everyone?
-                </span>
-                <button onClick={onEndGame}>Yes, end game</button>
-                <button
-                  className="secondary"
-                  onClick={() => setConfirmEnd(false)}
-                >
-                  Cancel
-                </button>
-              </>
-            ) : (
-              <button
-                className="secondary"
-                onClick={() => setConfirmEnd(true)}
-              >
-                End game
-              </button>
-            )}
+            <button className="secondary" onClick={onEndGame}>
+              End game
+            </button>
           </div>
         </div>
         <WordList guesses={guesses} className={styles.wordListCol} />

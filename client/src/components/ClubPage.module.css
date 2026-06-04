@@ -299,17 +299,8 @@
 }
 
 .endRow {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
   margin-top: 0.5rem;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-
-.confirmText {
-  font-size: 0.9rem;
-  color: #b91c1c;
+  text-align: center;
 }
 
 .resultActions {
