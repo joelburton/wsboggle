@@ -216,6 +216,7 @@ export function ClubPage({ clubId, me }: Props) {
               connected={state.connected}
               history={history}
               historyError={historyError}
+              lastConfig={state.lastConfig}
               onStart={sendNewGame}
             />
           )}
@@ -264,10 +265,19 @@ type LobbyProps = {
   connected: boolean;
   history: ClubGameSummary[] | null;
   historyError: string | null;
+  lastConfig: GameConfig | null;
   onStart: (config: GameConfig) => void;
 };
 
 function LobbyView(props: LobbyProps) {
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const disabled = !props.allOnline || !props.connected;
+  const disabledReason = !props.connected
+    ? "Reconnect to start a game."
+    : !props.allOnline
+    ? "Waiting for everyone to be in the club."
+    : null;
+
   return (
     <>
       <section className={styles.section}>
@@ -296,17 +306,37 @@ function LobbyView(props: LobbyProps) {
 
       <section className={styles.section}>
         <h2>New game</h2>
-        <NewGameForm
-          disabled={!props.allOnline || !props.connected}
-          disabledReason={
-            !props.connected
-              ? "Reconnect to start a game."
-              : !props.allOnline
-              ? "Waiting for everyone to be in the club."
-              : null
-          }
-          onStart={props.onStart}
-        />
+        <div className={styles.newGameRow}>
+          {props.lastConfig !== null && (
+            <button
+              disabled={disabled}
+              onClick={() => props.onStart(props.lastConfig!)}
+              title={describeConfig(props.lastConfig)}
+            >
+              ▶ Play again
+            </button>
+          )}
+          <button
+            className={props.lastConfig !== null ? "secondary" : ""}
+            disabled={disabled}
+            onClick={() => setDialogOpen(true)}
+          >
+            {props.lastConfig !== null ? "New game…" : "▶ New game…"}
+          </button>
+          {disabledReason && (
+            <span className={styles.disabledNote}>{disabledReason}</span>
+          )}
+        </div>
+        {dialogOpen && (
+          <NewGameDialog
+            initial={props.lastConfig}
+            onCancel={() => setDialogOpen(false)}
+            onStart={(cfg) => {
+              setDialogOpen(false);
+              props.onStart(cfg);
+            }}
+          />
+        )}
       </section>
 
       <section className={styles.section}>
@@ -363,67 +393,118 @@ const TIMERS: readonly { seconds: number; label: string }[] = [
   { seconds: 600, label: "10 minutes" },
 ];
 
-function buildConfig(diceSet: string, timerSeconds: number): GameConfig {
+/** Build a fresh GameConfig, merging the v1-exposed knobs with
+ *  whatever the previous config used for the v2-only knobs (mode,
+ *  dupes_cancel, etc.). Passing the last config through preserves
+ *  any future knob choices a club picks up. */
+function buildConfig(
+  diceSet: string,
+  timerSeconds: number,
+  base: GameConfig | null,
+): GameConfig {
   return {
     dice_set: diceSet,
-    scoring_ladder: "basic",
-    min_legal_length: 3,
-    mode: "competitive",
-    dupes_cancel: true,
+    scoring_ladder: base?.scoring_ladder ?? "basic",
+    min_legal_length: base?.min_legal_length ?? 3,
+    mode: base?.mode ?? "competitive",
+    dupes_cancel: base?.dupes_cancel ?? true,
     timer_seconds: timerSeconds,
-    timer_direction: "down",
-    min_words: null,
-    max_words: null,
-    min_score: null,
-    max_score: null,
-    min_longest: null,
-    max_longest: null,
+    timer_direction: base?.timer_direction ?? "down",
+    min_words: base?.min_words ?? null,
+    max_words: base?.max_words ?? null,
+    min_score: base?.min_score ?? null,
+    max_score: base?.max_score ?? null,
+    min_longest: base?.min_longest ?? null,
+    max_longest: base?.max_longest ?? null,
   };
 }
 
-type NewGameFormProps = {
-  disabled: boolean;
-  disabledReason: string | null;
+/** Short, hover-friendly description of a config for the "Play
+ *  again" button title — so the user knows what they're about to
+ *  start before they click. */
+function describeConfig(c: GameConfig | null): string {
+  if (c === null) return "";
+  const dice = DICE_SETS.find((d) => d.name === c.dice_set)?.label ?? c.dice_set;
+  const timer =
+    c.timer_seconds === null
+      ? "untimed"
+      : TIMERS.find((t) => t.seconds === c.timer_seconds)?.label ??
+        `${c.timer_seconds}s`;
+  return `${dice} · ${timer}`;
+}
+
+type NewGameDialogProps = {
+  /** Pre-fill the form from this config when provided. */
+  initial: GameConfig | null;
+  onCancel: () => void;
   onStart: (config: GameConfig) => void;
 };
 
-function NewGameForm({ disabled, disabledReason, onStart }: NewGameFormProps) {
-  const [diceSet, setDiceSet] = useState("4");
-  const [timer, setTimer] = useState(180);
+/** Modal dialog with the dice / timer dropdowns. Pre-fills from
+ *  ``initial`` (the club's last config) so picking a small variation
+ *  on the last game is one dropdown change + Start.
+ *
+ *  Backdrop click and Esc both cancel; Enter on the form submits.
+ *  No portal — the dialog renders inline beneath the lobby and the
+ *  fixed positioning + z-index takes it visually full-screen.
+ */
+function NewGameDialog({ initial, onCancel, onStart }: NewGameDialogProps) {
+  const [diceSet, setDiceSet] = useState(initial?.dice_set ?? "4");
+  const [timer, setTimer] = useState(initial?.timer_seconds ?? 180);
+
+  useEffect(() => {
+    function onKey(e: globalThis.KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onCancel();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
 
   function submit(e: FormEvent) {
     e.preventDefault();
-    if (disabled) return;
-    onStart(buildConfig(diceSet, timer));
+    onStart(buildConfig(diceSet, timer, initial));
   }
 
   return (
-    <form className={styles.newGameForm} onSubmit={submit}>
-      <select
-        value={diceSet}
-        onChange={(e) => setDiceSet(e.target.value)}
-        disabled={disabled}
-      >
-        {DICE_SETS.map((d) => (
-          <option key={d.name} value={d.name}>{d.label}</option>
-        ))}
-      </select>
-      <select
-        value={timer}
-        onChange={(e) => setTimer(Number(e.target.value))}
-        disabled={disabled}
-      >
-        {TIMERS.map((t) => (
-          <option key={t.seconds} value={t.seconds}>{t.label}</option>
-        ))}
-      </select>
-      <button type="submit" disabled={disabled}>
-        ▶ Start game
-      </button>
-      {disabledReason && (
-        <span className={styles.disabledNote}>{disabledReason}</span>
-      )}
-    </form>
+    <div className={styles.dialogBackdrop} onClick={onCancel}>
+      <div className={styles.dialog} onClick={(e) => e.stopPropagation()}>
+        <h3>New game</h3>
+        <form onSubmit={submit}>
+          <label className={styles.dialogField}>
+            <span>Tileset</span>
+            <select
+              value={diceSet}
+              onChange={(e) => setDiceSet(e.target.value)}
+              autoFocus
+            >
+              {DICE_SETS.map((d) => (
+                <option key={d.name} value={d.name}>{d.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className={styles.dialogField}>
+            <span>Timer</span>
+            <select
+              value={timer ?? 180}
+              onChange={(e) => setTimer(Number(e.target.value))}
+            >
+              {TIMERS.map((t) => (
+                <option key={t.seconds} value={t.seconds}>{t.label}</option>
+              ))}
+            </select>
+          </label>
+          <div className={styles.dialogActions}>
+            <button type="button" className="secondary" onClick={onCancel}>
+              Cancel
+            </button>
+            <button type="submit">▶ Start</button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
 

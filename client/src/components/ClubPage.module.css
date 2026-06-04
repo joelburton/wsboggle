@@ -193,6 +193,56 @@
   font-size: 0.9rem;
 }
 
+/* --- New-game dialog -------------------------------------------- */
+
+.dialogBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+}
+
+.dialog {
+  background: white;
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+  width: 100%;
+  max-width: 340px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+}
+
+.dialog h3 {
+  margin: 0 0 1rem 0;
+  font-size: 1.05rem;
+}
+
+.dialogField {
+  display: block;
+  margin-bottom: 0.75rem;
+}
+
+.dialogField span {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #374151;
+  margin-bottom: 0.2rem;
+}
+
+.dialogField select {
+  width: 100%;
+}
+
+.dialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
 /* --- Play view -------------------------------------------------- */
 
 .playHeader {

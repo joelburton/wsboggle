@@ -445,6 +445,11 @@ class SClubState(BaseModel):
     enough to render the play view immediately. The snapshot is
     per-viewer — ``your_guesses`` reflects only the connecting
     user's own submissions (competitive privacy).
+
+    ``last_config`` is the config of the club's most recent game
+    (active or ended), or ``None`` for a club that has never
+    played. The lobby pre-fills the new-game dialog from it and
+    offers a one-click "Play again" shortcut.
     """
 
     type: Literal["clubState"] = "clubState"
@@ -453,6 +458,7 @@ class SClubState(BaseModel):
     members: list[ClubMember]
     chat: list[ChatMessage]
     current_game: "GameSnapshot | None" = None
+    last_config: "GameConfig | None" = None
 
 
 class SChatMessage(BaseModel):

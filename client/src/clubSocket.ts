@@ -54,6 +54,12 @@ export type ClubSocketState = {
    *  shows it and then clears it (via `clearResult`) when the
    *  user opts back into the lobby. */
   gameResult: GameResult | null;
+  /** Config of the club's most recently-started game. Used by the
+   *  lobby to pre-fill the new-game dialog and surface a one-click
+   *  "Play again". Null for clubs that have never played. Updates
+   *  on clubState (initial) and gameStarted (when a fresh game
+   *  becomes the "last"). */
+  lastConfig: GameConfig | null;
 
   /** Transient toasts queued by server `feedback`; consumer is
    *  expected to render + clear. */
@@ -77,6 +83,7 @@ const initialState: ClubSocketState = {
   currentGame: null,
   yourGuesses: [],
   gameResult: null,
+  lastConfig: null,
   feedback: [],
 };
 
@@ -108,6 +115,7 @@ function reducer(state: ClubSocketState, action: Action): ClubSocketState {
             currentGame: msg.current_game,
             yourGuesses: msg.current_game?.your_guesses ?? [],
             gameResult: null,
+            lastConfig: msg.last_config,
           };
         case "chatMessage":
           return { ...state, chat: [...state.chat, msg.message] };
@@ -132,6 +140,7 @@ function reducer(state: ClubSocketState, action: Action): ClubSocketState {
             currentGame: msg.snapshot,
             yourGuesses: msg.snapshot.your_guesses,
             gameResult: null,
+            lastConfig: msg.snapshot.config,
           };
         case "guessAccepted":
           // Append to the word list — both legal and the three

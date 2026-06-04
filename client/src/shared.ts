@@ -222,6 +222,10 @@ export type SClubState = {
   /** Populated when a game is currently active; per-viewer
    *  `your_guesses` for the connecting user. */
   current_game: GameSnapshot | null;
+  /** Config of the club's most recently-started game, or null for
+   *  a brand-new club. The lobby pre-fills the new-game dialog
+   *  from this and shows a one-click "Play again". */
+  last_config: GameConfig | null;
 };
 
 export type SChatMessage = {

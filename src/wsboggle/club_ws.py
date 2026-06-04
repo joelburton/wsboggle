@@ -290,6 +290,7 @@ async def club_socket(ws: WebSocket, club_id: int) -> None:
                 members=members,
                 chat=chat.history(db, club_id),
                 current_game=current_game,
+                last_config=games.find_last_club_config(db, club_id),
             ),
         )
         if first_socket:

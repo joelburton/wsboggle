@@ -150,6 +150,28 @@ def find_game(db: sqlite3.Connection, game_id: int) -> GameState | None:
     return None if row is None else _row_to_state(row)
 
 
+def find_last_club_config(
+    db: sqlite3.Connection, club_id: int
+) -> GameConfig | None:
+    """The config of the club's most recently-started game, or
+    ``None`` when the club has never played.
+
+    Surfaces in ``clubState.last_config`` so the new-game dialog
+    can pre-fill from "what we played last" and the lobby can
+    offer a one-click "Play again" shortcut. CLAUDE.md notes that
+    last-config-per-club is derived at read time from the games
+    table — no separate config column on ``clubs``.
+    """
+    row = db.execute(
+        "SELECT config FROM games WHERE club_id = ? "
+        "ORDER BY id DESC LIMIT 1",
+        (club_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return GameConfig.model_validate_json(row["config"])
+
+
 def find_active_club_game(
     db: sqlite3.Connection, club_id: int
 ) -> GameState | None:
