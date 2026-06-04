@@ -136,6 +136,13 @@ Board* make_board(
     b->max_longest = max_longest == -1 ? INT32_MAX : max_longest;
     b->min_legal = min_legal;
     b->score = 0;
+    // Init the scratch fields so the first call to find_all_words
+    // (and our free_tree-on-retry) doesn't read uninitialized memory.
+    b->num_words = 0;
+    b->longest = 0;
+    b->legal = NULL;
+    b->word_array = NULL;
+    b->dice_simple = NULL;
     return b;
 }
 
@@ -358,13 +365,23 @@ static bool find_words( // NOLINT(*-no-recursion)
 #define MAX_WORD_LEN 16
 
 
+// Forward declaration so find_all_words can call the tree-cleanup
+// helper at the top of each retry. The implementation lives below
+// next to bws_btree_to_array since they share the tree-walk plumbing.
+static void free_tree(Board *board, bool free_strings);
+
+
 /** Find all words on board. */
 
 bool find_all_words(Board *b) {
+    // Drain the previous retry's tree (if any) before resetting.
+    // Without this the rejection sampler leaks one full word list
+    // per failed attempt — at tight constraints that's hundreds of
+    // discarded trees per generated board.
+    free_tree(b, true);
     b->num_words = 0;
     b->longest = 0;
     b->score = 0;
-    b->legal = NULL;
 
     char word[MAX_WORD_LEN + 1];
 
@@ -384,74 +401,122 @@ bool find_all_words(Board *b) {
 
     return true;
 }
-//
-//
-///** Free word inside a BoardWord. */
-//
-//void delNode( const void *nodep, const VISIT value, [[maybe_unused]] int level) {
-//    const BoardWord *n = *(const BoardWord **) nodep;
-//
-//    if (value == leaf || value == endorder) {
-//        free((void *) n->word);
-//        free((void *) n);
-//        free((void *) nodep);
-//    }
-//}
-//
-///** Free list of legal words. */
-//
-//void free_words(const Board *board) {
-//    twalk(board->legal, delNode);
-//    // board->legal = nullptr;
-//}
-//
 int fill_board(Board *board, int max_tries){
     int count = 0;
     while (count++ < max_tries) {
+        // make_dice mallocs a fresh dice_simple every retry; release
+        // the previous one so the rejection sampler doesn't leak one
+        // board-string per failed attempt.
+        if (board->dice_simple != NULL) {
+            free(board->dice_simple);
+            board->dice_simple = NULL;
+        }
         make_dice(board);
         if (find_all_words(board)) break;
     }
-    // printf("tries: %d\n", count);
     return count;
-        // free_words(board);
 }
 
 
-struct WalkData {
-    char **words;
+/* The tree-walk machinery is platform-split: glibc's twalk_r passes
+ * a user-data pointer; BSD/macOS twalk doesn't, so the callback has
+ * to read from a file-scope global. Single-threaded usage (the GIL
+ * serializes our get_words calls) means the global is safe. */
+
+struct CollectBws {
+    BoardWord **bws;   // every BoardWord in the tree, in walk order
     int marker;
 };
 
 #if __linux__
-void btree_callback(const void *n, const VISIT value, void *data) {
+static void collect_bws_cb(const void *n, const VISIT value, void *data) {
     if (value == leaf || value == postorder) {
-        struct WalkData *walker = data;
-        BoardWord *bw = *(BoardWord **)n;
-        walker->words[walker->marker++] = bw->word;
+        struct CollectBws *c = data;
+        c->bws[c->marker++] = *(BoardWord **)n;
     }
 }
 
-void bws_btree_to_array(Board *board) {
-    board->word_array = malloc(((board->num_words + 1) * sizeof(BoardWord*)));
-    struct WalkData walker = {board->word_array, 0};
-    twalk_r(board->legal, btree_callback, &walker);
+static void collect_bws(Board *board, BoardWord **out) {
+    struct CollectBws c = {out, 0};
+    twalk_r(board->legal, collect_bws_cb, &c);
 }
 #else
-struct WalkData *walker;
-void btree_callback(const void *n, const VISIT value, int depth) {
+static struct CollectBws *collect_bws_cur;
+static void collect_bws_cb(const void *n, const VISIT value, int depth) {
+    (void)depth;
     if (value == leaf || value == postorder) {
-        BoardWord *bw = *(BoardWord **)n;
-        walker->words[walker->marker++] = bw->word;
+        collect_bws_cur->bws[collect_bws_cur->marker++] = *(BoardWord **)n;
     }
 }
 
-void bws_btree_to_array(Board *board) {
-    board->word_array = malloc(((board->num_words + 1) * sizeof(BoardWord*)));
-    struct WalkData w = {board->word_array, 0};
-    walker = &w;
-    twalk(board->legal, btree_callback);
+static void collect_bws(Board *board, BoardWord **out) {
+    struct CollectBws c = {out, 0};
+    collect_bws_cur = &c;
+    twalk(board->legal, collect_bws_cb);
+    collect_bws_cur = NULL;
 }
 #endif
+
+/** Destroy a board's legal-word tree.
+ *
+ * Used in two places with subtly different semantics:
+ *
+ * - At the top of find_all_words: ``free_strings == true``. The
+ *   previous retry's words are dead weight — free both the
+ *   BoardWord structs and the strdup'd word strings.
+ * - In bws_btree_to_array, after the strings have been copied into
+ *   ``word_array``: ``free_strings == false``. The strings live on
+ *   in word_array (and Python's free_words will release them); we
+ *   only need to drain the tree internals here.
+ *
+ * Walks the tree once to collect every BoardWord, then tdeletes
+ * each (which frees the tsearch internal node) and frees the
+ * BoardWord struct. After this the tree is empty and
+ * ``board->legal`` is NULL.
+ */
+
+static void free_tree(Board *board, bool free_strings) {
+    if (board->legal == NULL || board->num_words == 0) {
+        board->legal = NULL;
+        return;
+    }
+    BoardWord **bws = malloc((size_t) board->num_words * sizeof(BoardWord *));
+    collect_bws(board, bws);
+
+    for (int i = 0; i < board->num_words; i++) {
+        BoardWord *bw = bws[i];
+        tdelete(bw, (void **) &board->legal, boardwords_cmp);
+        if (free_strings) free((void *) bw->word);
+        free(bw);
+    }
+    free(bws);
+    board->legal = NULL;
+}
+
+/** Populate ``board->word_array`` with the strdup'd word pointers
+ *  and drain the tree (which is the sole other holder of those
+ *  pointers). After this returns, ``word_array`` owns the strings,
+ *  the tree is gone, and Python's free_words is responsible for
+ *  releasing both. */
+
+void bws_btree_to_array(Board *board) {
+    board->word_array = malloc(((size_t) board->num_words + 1) * sizeof(char *));
+    BoardWord **bws = malloc((size_t) board->num_words * sizeof(BoardWord *));
+    collect_bws(board, bws);
+
+    for (int i = 0; i < board->num_words; i++) {
+        BoardWord *bw = bws[i];
+        // Hand the strdup'd string off to the word_array.
+        // (The const-cast is intentional: word_array is the new
+        // owner and Python will eventually free() each entry.)
+        board->word_array[i] = (char *) bw->word;
+        tdelete(bw, (void **) &board->legal, boardwords_cmp);
+        free(bw);
+    }
+    board->word_array[board->num_words] = NULL;
+    free(bws);
+    board->legal = NULL;
+}
 
 char **get_words(
     char *set[],
@@ -488,6 +553,28 @@ char **get_words(
     *num_tries = fill_board(b, max_tries);
     *dice_simple = b->dice_simple;
     bws_btree_to_array(b);
-    b->word_array[b->num_words] = NULL;
-    return b->word_array;
+    char **result = b->word_array;
+    // word_array + dice_simple are now owned by the caller; the
+    // Board struct itself is just metadata and can go.
+    free(b);
+    return result;
+}
+
+
+/** Release the (word_array, dice_simple) pair returned by
+ *  ``get_words``. Frees each strdup'd word, the array itself, and
+ *  the dice string. NULL on either argument is allowed so the
+ *  Python wrapper can call this unconditionally in a finally
+ *  block. */
+
+void free_words(char **words, char *dice_simple) {
+    if (words != NULL) {
+        for (int i = 0; words[i] != NULL; i++) {
+            free(words[i]);
+        }
+        free(words);
+    }
+    if (dice_simple != NULL) {
+        free(dice_simple);
+    }
 }

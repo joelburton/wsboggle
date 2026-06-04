@@ -77,6 +77,9 @@ def _load_library() -> ctypes.CDLL:
     # argtypes set per-call because the dice / score arrays are
     # variable-length (depends on the dice set and ladder).
 
+    lib.free_words.argtypes = [POINTER(c_char_p), c_char_p]
+    lib.free_words.restype = None
+
     return lib
 
 
@@ -167,20 +170,27 @@ def generate_board(
         byref(raw_board_buf),
     )
 
-    if not raw_board_buf.value:
-        raise RuntimeError(
-            f"libwords.get_words returned no board after {tries.value} tries; "
-            "constraints may be too tight."
-        )
+    try:
+        if not raw_board_buf.value:
+            raise RuntimeError(
+                f"libwords.get_words returned no board after {tries.value} "
+                "tries; constraints may be too tight."
+            )
 
-    raw_board = raw_board_buf.value.decode("utf-8")
+        raw_board = raw_board_buf.value.decode("utf-8")
 
-    # Walk the null-terminated word array.
-    words: list[str] = []
-    i = 0
-    while words_p[i]:
-        words.append(words_p[i].decode("utf-8").lower())
-        i += 1
+        # Walk the null-terminated word array.
+        words: list[str] = []
+        i = 0
+        while words_p[i]:
+            words.append(words_p[i].decode("utf-8").lower())
+            i += 1
+    finally:
+        # Hand the C-side allocations back. raw_board_buf carries the
+        # dice_simple pointer the solver set via byref(); after this
+        # call its underlying pointer is invalid, so the decode +
+        # word-list build above must already be done.
+        lib.free_words(words_p, raw_board_buf)
 
     return GeneratedBoard(
         raw_board=raw_board,
