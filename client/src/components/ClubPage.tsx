@@ -429,6 +429,16 @@ const TIMER_MODES: readonly TimerMode[] = [
   { id: "untimed", label: "Untimed",     seconds: null, direction: "down" },
 ];
 
+/** Named scoring ladders mirroring ``wsboggle.scoring.LADDERS``.
+ *  Server is the source of truth; the client only needs the names
+ *  + display labels. */
+const SCORING_LADDERS: readonly { name: string; label: string }[] = [
+  { name: "basic", label: "Basic: 1–11" },
+  { name: "flat",  label: "Flat: 1" },
+  { name: "fib",   label: "Fibonacci: 1–377" },
+  { name: "big",   label: "Prefer big: 1–50" },
+];
+
 /** Map a GameConfig back to a TIMER_MODES id so the dialog can
  *  pre-fill the dropdown from last_config. Brand-new clubs land
  *  on the 3-minute default. */
@@ -447,12 +457,13 @@ function configToModeId(c: GameConfig | null): string {
 function buildConfig(
   diceSet: string,
   mode: TimerMode,
+  scoringLadder: string,
   constraints: Constraints,
   base: GameConfig | null,
 ): GameConfig {
   return {
     dice_set: diceSet,
-    scoring_ladder: base?.scoring_ladder ?? "basic",
+    scoring_ladder: scoringLadder,
     min_legal_length: base?.min_legal_length ?? 3,
     mode: base?.mode ?? "competitive",
     dupes_cancel: base?.dupes_cancel ?? true,
@@ -513,6 +524,9 @@ type NewGameDialogProps = {
 function NewGameDialog({ initial, onCancel, onStart }: NewGameDialogProps) {
   const [diceSet, setDiceSet] = useState(initial?.dice_set ?? "4");
   const [modeId, setModeId] = useState(configToModeId(initial));
+  const [scoringLadder, setScoringLadder] = useState(
+    initial?.scoring_ladder ?? "basic",
+  );
   const [constraints, setConstraints] = useState<Constraints>(
     constraintsFromConfig(initial),
   );
@@ -531,7 +545,7 @@ function NewGameDialog({ initial, onCancel, onStart }: NewGameDialogProps) {
   function submit(e: FormEvent) {
     e.preventDefault();
     const mode = TIMER_MODES.find((m) => m.id === modeId) ?? TIMER_MODES[3];
-    onStart(buildConfig(diceSet, mode, constraints, initial));
+    onStart(buildConfig(diceSet, mode, scoringLadder, constraints, initial));
   }
 
   return (
@@ -559,6 +573,17 @@ function NewGameDialog({ initial, onCancel, onStart }: NewGameDialogProps) {
             >
               {TIMER_MODES.map((m) => (
                 <option key={m.id} value={m.id}>{m.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className={styles.dialogField}>
+            <span>Scoring</span>
+            <select
+              value={scoringLadder}
+              onChange={(e) => setScoringLadder(e.target.value)}
+            >
+              {SCORING_LADDERS.map((l) => (
+                <option key={l.name} value={l.name}>{l.label}</option>
               ))}
             </select>
           </label>

@@ -44,6 +44,14 @@ const TIMER_MODES: readonly TimerMode[] = [
   { id: "untimed", label: "Untimed",     seconds: null, direction: "down" },
 ];
 
+/** Named scoring ladders mirroring ``wsboggle.scoring.LADDERS``. */
+const SCORING_LADDERS: readonly { name: string; label: string }[] = [
+  { name: "basic", label: "Basic: 1–11" },
+  { name: "flat",  label: "Flat: 1" },
+  { name: "fib",   label: "Fibonacci: 1–377" },
+  { name: "big",   label: "Prefer big: 1–50" },
+];
+
 /** Build a complete GameConfig from the knobs we expose, filling
  *  in the same defaults the server would. Sending an explicit full
  *  shape (rather than a partial) keeps the wire payload obvious from
@@ -51,11 +59,12 @@ const TIMER_MODES: readonly TimerMode[] = [
 function buildConfig(
   diceSet: string,
   mode: TimerMode,
+  scoringLadder: string,
   constraints: Constraints,
 ): GameConfig {
   return {
     dice_set: diceSet,
-    scoring_ladder: "basic",
+    scoring_ladder: scoringLadder,
     min_legal_length: 3,
     mode: "competitive",
     dupes_cancel: true,
@@ -73,6 +82,7 @@ function buildConfig(
 export function NewSoloGamePage() {
   const [diceSet, setDiceSet] = useState("4");
   const [modeId, setModeId] = useState("180");
+  const [scoringLadder, setScoringLadder] = useState("basic");
   const [constraints, setConstraints] = useState<Constraints>(EMPTY_CONSTRAINTS);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -83,7 +93,9 @@ export function NewSoloGamePage() {
     setPending(true);
     try {
       const mode = TIMER_MODES.find((m) => m.id === modeId) ?? TIMER_MODES[3];
-      const snap = await api.startSolo(buildConfig(diceSet, mode, constraints));
+      const snap = await api.startSolo(
+        buildConfig(diceSet, mode, scoringLadder, constraints),
+      );
       navigate(`/solo/${snap.game_id}`);
     } catch (err) {
       if (err instanceof ApiError) setError(err.detail);
@@ -115,6 +127,18 @@ export function NewSoloGamePage() {
           >
             {TIMER_MODES.map((m) => (
               <option key={m.id} value={m.id}>{m.label}</option>
+            ))}
+          </select>
+        </label>
+
+        <label className={styles.field}>
+          <span>Scoring</span>
+          <select
+            value={scoringLadder}
+            onChange={(e) => setScoringLadder(e.target.value)}
+          >
+            {SCORING_LADDERS.map((l) => (
+              <option key={l.name} value={l.name}>{l.label}</option>
             ))}
           </select>
         </label>
