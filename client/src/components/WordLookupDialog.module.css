@@ -1,0 +1,54 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 70;
+}
+
+.dialog {
+  background: white;
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+  width: 100%;
+  max-width: 480px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+}
+
+.dialog h3 {
+  margin: 0 0 1rem 0;
+  font-size: 1.05rem;
+}
+
+.input {
+  width: 100%;
+  font-size: 1.05rem;
+  padding: 0.5rem 0.6rem;
+  box-sizing: border-box;
+}
+
+.result {
+  margin-top: 1rem;
+  min-height: 4rem;
+  font-size: 0.95rem;
+  line-height: 1.4;
+  color: #1f2937;
+}
+
+.hint {
+  color: #6b7280;
+  margin: 0;
+}
+
+.foundWord {
+  letter-spacing: 0.05em;
+}
+
+.error {
+  color: #b91c1c;
+  background: #fee2e2;
+  padding: 0.4rem 0.6rem;
+  border-radius: 4px;
+}

@@ -40,8 +40,8 @@ import type {
   GuessResponse,
   MeResponse,
 } from "../shared";
-import { Board } from "./Board";
 import { BoardStats } from "./BoardStats";
+import { RotatableBoard } from "./RotatableBoard";
 import { ChatPanel as FloatingChatPanel, ChatIndicator } from "./ChatPanel";
 import { GameConstraints, EMPTY_CONSTRAINTS, type Constraints } from "./GameConstraints";
 import { GameResultPanel } from "./GameResultPanel";
@@ -651,7 +651,7 @@ function PlayView({ snapshot, guesses, myUserId, onGuess, onEndGame }: PlayProps
       </div>
       <div className={styles.playArea}>
         <div className={styles.boardColumn}>
-          <Board board={snapshot.board} />
+          <RotatableBoard board={snapshot.board} />
           <div className={styles.entry}>
             <WordEntry onSubmit={onGuess} />
           </div>

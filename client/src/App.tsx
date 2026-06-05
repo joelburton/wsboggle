@@ -23,6 +23,7 @@ import { NewSoloGamePage } from "./components/NewSoloGamePage";
 import { SoloPlayPage } from "./components/SoloPlayPage";
 import { NewClubPage } from "./components/NewClubPage";
 import { ClubPage } from "./components/ClubPage";
+import { WordLookupDialog } from "./components/WordLookupDialog";
 
 type AuthState =
   | { kind: "loading" }
@@ -66,25 +67,67 @@ export function App() {
     return <LoginPage onSuccess={onAuthSuccess} />;
   }
 
-  // Authed routes.
+  return <AuthedApp me={auth.me} route={route} onLogout={onLogout} />;
+}
+
+type AuthedProps = {
+  me: MeResponse;
+  route: ReturnType<typeof useRoute>;
+  onLogout: () => void;
+};
+
+/** Authed-only shell: the route's page plus app-wide overlays
+ *  (currently just the "?" word-lookup dialog). Lives in its own
+ *  component so the global "?" listener mounts only after auth and
+ *  doesn't compete with the login form. */
+function AuthedApp({ me, route, onLogout }: AuthedProps) {
+  const [lookupOpen, setLookupOpen] = useState(false);
+
+  useEffect(() => {
+    function onKey(e: globalThis.KeyboardEvent) {
+      if (lookupOpen) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      // "?" arrives as Shift + "/"; checking e.key gives us "?"
+      // directly on US layouts; non-US users with a different
+      // location for ? would need a remap, but we don't have any
+      // yet.
+      if (e.key === "?") {
+        e.preventDefault();
+        setLookupOpen(true);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lookupOpen]);
+
+  let page: React.ReactNode;
   switch (route.kind) {
     case "home":
-      return <HomePage me={auth.me} onLogout={onLogout} />;
+      page = <HomePage me={me} onLogout={onLogout} />;
+      break;
     case "solo-new":
-      return <NewSoloGamePage />;
+      page = <NewSoloGamePage />;
+      break;
     case "solo-play":
-      return <SoloPlayPage gameId={route.gameId} me={auth.me} />;
+      page = <SoloPlayPage gameId={route.gameId} me={me} />;
+      break;
     case "club-new":
-      return <NewClubPage me={auth.me} />;
+      page = <NewClubPage me={me} />;
+      break;
     case "club":
-      return <ClubPage clubId={route.clubId} me={auth.me} />;
+      page = <ClubPage clubId={route.clubId} me={me} />;
+      break;
     case "login":
     case "register":
-      return null; // redirect effect handles this
+      page = null; // redirect effect handles this
+      break;
     case "review":
     case "not-found":
     default:
-      return (
+      page = (
         <main style={{ padding: "2rem" }}>
           <h1>Not yet</h1>
           <p>This view isn't built in the v1 milestone.</p>
@@ -95,5 +138,13 @@ export function App() {
           </p>
         </main>
       );
+      break;
   }
+
+  return (
+    <>
+      {page}
+      {lookupOpen && <WordLookupDialog onClose={() => setLookupOpen(false)} />}
+    </>
+  );
 }

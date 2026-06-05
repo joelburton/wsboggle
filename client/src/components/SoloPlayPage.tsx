@@ -26,8 +26,8 @@ import type {
   GuessResponse,
   MeResponse,
 } from "../shared";
-import { Board } from "./Board";
 import { BoardStats } from "./BoardStats";
+import { RotatableBoard } from "./RotatableBoard";
 import { GameResultPanel } from "./GameResultPanel";
 import { Timer } from "./Timer";
 import { WordEntry } from "./WordEntry";
@@ -159,7 +159,7 @@ export function SoloPlayPage({ gameId, me }: Props) {
 
       <div className={styles.playArea}>
         <div className={styles.boardColumn}>
-          <Board board={snapshot.board} />
+          <RotatableBoard board={snapshot.board} />
           <div className={styles.entry}>
             <WordEntry onSubmit={handleSubmit} />
           </div>
