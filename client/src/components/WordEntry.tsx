@@ -93,6 +93,9 @@ export function WordEntry({ onSubmit, disabled, className, feedbackClassName }: 
         case "not_on_board":
           setFeedback({ text: `${w}: not on board`, tone: "bad" });
           break;
+        case "not_in_word_list":
+          setFeedback({ text: `${w}: not in our word list`, tone: "bad" });
+          break;
         case "not_a_word":
           setFeedback({ text: `${w}: not a word`, tone: "bad" });
           break;

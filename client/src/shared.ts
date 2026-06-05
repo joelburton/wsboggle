@@ -113,9 +113,10 @@ export type GuessRequest = {
 
 export type GuessResult =
   | "accepted"
-  | "too_short"      // real word but below the game's min length
-  | "not_on_board"   // real word but no path on this board
-  | "not_a_word"     // not in the dictionary at all
+  | "too_short"        // real word but below the game's min length
+  | "not_on_board"     // real word but no path on this board
+  | "not_in_word_list" // real word, traceable, but not in our DAWG
+  | "not_a_word"       // not in the dictionary at all
   | "already_submitted"
   | "game_inactive";
 
@@ -270,9 +271,14 @@ export type SGuessAccepted = {
   type: "guessAccepted";
   word: string;
   points: number;
-  /** Same four-way classification as the solo HTTP `GuessResponse`.
-   *  Derive `is_legal` as `result === "accepted"` when needed. */
-  result: "accepted" | "too_short" | "not_on_board" | "not_a_word";
+  /** Same classification as the solo HTTP `GuessResponse`. Derive
+   *  `is_legal` as `result === "accepted"` when needed. */
+  result:
+    | "accepted"
+    | "too_short"
+    | "not_on_board"
+    | "not_in_word_list"
+    | "not_a_word";
 };
 
 export type SGuessSubmitted = {

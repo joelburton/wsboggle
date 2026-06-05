@@ -358,14 +358,78 @@ def submit_guess(
     # cleaner UX message than "not on board" for a 2-letter real word.
     if len(normalized) < game.config.min_legal_length:
         return GuessOutcome(result="too_short", points=0)
-    # Dictionary lookup distinguishes "real word, just not on this
-    # board" from "not a word at all". When the dictionary file
-    # isn't installed (some test envs) ``define`` returns None for
-    # everything; everything illegal collapses to ``not_a_word``,
-    # which is the same imprecise feedback we had before.
-    if dictionary.define(normalized) is not None:
+
+    # Two independent signals: is the word in our dictionary?
+    # (data/all.sqlite3 — the source of definitions.) And can we
+    # actually trace it on the board?
+    #
+    # The C solver's legal_words is the intersection of the *DAWG*
+    # word list (data/words.dat) and the board's traceable paths.
+    # The DAWG and the SQLite dictionary are separate word sets;
+    # a word can sit in the dictionary but be missing from the
+    # DAWG, in which case the user can legitimately trace it but
+    # the solver won't have credited it. That's not the same as
+    # "not on board", so we run a real adjacency walk to tell the
+    # two apart.
+    in_dict = dictionary.define(normalized) is not None
+    on_board = _word_on_board(normalized, game)
+
+    if in_dict:
+        if on_board:
+            # Traceable + real word, but not in our DAWG. Honest
+            # answer: we don't accept this word, period.
+            return GuessOutcome(result="not_in_word_list", points=0)
         return GuessOutcome(result="not_on_board", points=0)
+    # Not in the dictionary; the on_board distinction doesn't
+    # matter for the player ("you can trace it but it's not a
+    # word" → just "not a word").
     return GuessOutcome(result="not_a_word", points=0)
+
+
+def _word_on_board(word: str, game: GameState) -> bool:
+    """True iff ``word`` can be traced on the game's board by
+    walking adjacent tiles, with each tile used at most once and
+    multi-letter tiles (``Qu``/``In``/``Th``/``Er``/``He``)
+    consumed as a single unit.
+
+    Used by :func:`submit_guess` to distinguish "real word that
+    we just don't credit" from "real word that the user can't
+    actually trace here." The solver already does this work
+    against the full DAWG; here we do it for one specific word,
+    which is microseconds-fast in practice because the path-prune
+    on letter-mismatch fires immediately.
+    """
+    dset = dice.get_by_name(game.config.dice_set)
+    grid = dice.board_to_display(game.board_raw, dset.num)
+    target = word.lower()
+    rows = len(grid)
+    cols = len(grid[0]) if rows else 0
+
+    def walk(y: int, x: int, pos: int, used: frozenset[tuple[int, int]]) -> bool:
+        if pos >= len(target):
+            return True
+        if y < 0 or y >= rows or x < 0 or x >= cols:
+            return False
+        if (y, x) in used:
+            return False
+        tile = grid[y][x].lower()
+        if not target.startswith(tile, pos):
+            return False
+        new_used = used | {(y, x)}
+        new_pos = pos + len(tile)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dy == 0 and dx == 0:
+                    continue
+                if walk(y + dy, x + dx, new_pos, new_used):
+                    return True
+        return False
+
+    for y in range(rows):
+        for x in range(cols):
+            if walk(y, x, 0, frozenset()):
+                return True
+    return False
 
 
 def end_game(db: sqlite3.Connection, game: GameState) -> GameState:

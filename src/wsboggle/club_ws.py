@@ -530,7 +530,13 @@ async def _handle_guess(
         )
         return
 
-    if outcome.result in ("accepted", "too_short", "not_on_board", "not_a_word"):
+    if outcome.result in (
+        "accepted",
+        "too_short",
+        "not_on_board",
+        "not_in_word_list",
+        "not_a_word",
+    ):
         # Competitive accepted (private list) and any illegal-but-
         # recorded case (collaborative *or* competitive) come back
         # as guessAccepted. The client decides whether to append:

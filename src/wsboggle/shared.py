@@ -214,19 +214,25 @@ class GuessRequest(BaseModel):
 
 GuessResult = Literal[
     "accepted",
-    "too_short",       # real word but below ``min_legal_length``
-    "not_on_board",    # real word per the dictionary, but not findable on this board
-    "not_a_word",      # not in the dictionary at all
+    "too_short",        # real word but below ``min_legal_length``
+    "not_on_board",     # real word per the dictionary, but not findable on this board
+    "not_in_word_list", # real word, *is* findable on this board, but not in our DAWG
+    "not_a_word",       # not in the dictionary at all
     "already_submitted",
     "game_inactive",
 ]
-"""Finer-grained than just "legal vs not": the three illegal-but-
-recorded outcomes (``too_short`` / ``not_on_board`` / ``not_a_word``)
-all show up struck through in the player's word list, but the UI
-renders different immediate feedback under the entry box ("too
-short" vs "not on board" vs "not a word"). Distinguishing them
-needs the dictionary; when the dictionary file isn't installed
-(some tests), every non-board word falls back to ``not_a_word``.
+"""Finer-grained than just "legal vs not": the four illegal-but-
+recorded outcomes (``too_short`` / ``not_on_board`` /
+``not_in_word_list`` / ``not_a_word``) all show up struck through
+in the player's word list, but the UI renders different immediate
+feedback under the entry box.
+
+The split between ``not_on_board`` and ``not_in_word_list`` exists
+because the solver's word file (``words.dat``) and the dictionary
+of definitions (``all.sqlite3``) are independent — a word can sit
+in the dictionary but not the DAWG, in which case the user can
+legitimately trace it on the board, the solver just never credits
+it. Saying "not on board" in that case would be a lie.
 """
 
 
@@ -551,7 +557,13 @@ class SGuessAccepted(BaseModel):
     type: Literal["guessAccepted"] = "guessAccepted"
     word: str
     points: int
-    result: Literal["accepted", "too_short", "not_on_board", "not_a_word"]
+    result: Literal[
+        "accepted",
+        "too_short",
+        "not_on_board",
+        "not_in_word_list",
+        "not_a_word",
+    ]
 
 
 class SGuessSubmitted(BaseModel):
