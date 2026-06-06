@@ -38,25 +38,40 @@ export function BoardStats({ stats, guesses, collaborative, className }: Props) 
     if (g.word.length > longest) longest = g.word.length;
   }
 
+  const wordsPct = pct(words, stats.total_words);
+  const scorePct = pct(points, stats.total_points);
+
   return (
     <div className={`${styles.panel} ${className ?? ""}`}>
       <div className={styles.head}>
         <span />
         <span className={styles.colHead}>{collaborative ? "Us" : "You"}</span>
+        <span />
         <span className={styles.colHead}>Board</span>
       </div>
-      <StatRow label="Words" you={words} max={stats.total_words} />
-      <StatRow label="Score" you={points} max={stats.total_points} />
-      <StatRow label="Long"  you={longest} max={stats.longest_word} />
+      <StatRow label="Words" you={words}   pct={wordsPct} max={stats.total_words} />
+      <StatRow label="Score" you={points}  pct={scorePct} max={stats.total_points} />
+      <StatRow label="Long"  you={longest}                max={stats.longest_word} />
     </div>
   );
 }
 
-function StatRow({ label, you, max }: { label: string; you: number; max: number }) {
+/** Player's fraction of the board's max, rounded to a whole percent.
+ *  Returns null when the board has zero of whatever we're measuring,
+ *  so the row renders an empty cell instead of "NaN%" or "0%". */
+function pct(you: number, max: number): number | null {
+  if (max <= 0) return null;
+  return Math.round((100 * you) / max);
+}
+
+function StatRow({
+  label, you, max, pct,
+}: { label: string; you: number; max: number; pct?: number | null }) {
   return (
     <div className={styles.row}>
       <span className={styles.label}>{label}</span>
       <span className={styles.you}>{you}</span>
+      <span className={styles.pct}>{pct != null ? `${pct}%` : ""}</span>
       <span className={styles.max}>{max}</span>
     </div>
   );

@@ -1,6 +1,6 @@
 .panel {
   display: grid;
-  grid-template-columns: auto 1fr 1fr;
+  grid-template-columns: auto 1fr auto 1fr;
   gap: 0.15rem 0.75rem;
   background: white;
   border: 1px solid #e5e7eb;
@@ -40,4 +40,10 @@
 .max {
   text-align: right;
   color: #6b7280;
+}
+
+.pct {
+  text-align: right;
+  color: #9ca3af;
+  font-size: 0.85rem;
 }
