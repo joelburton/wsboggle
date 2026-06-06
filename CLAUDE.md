@@ -193,15 +193,25 @@ We accept hand-mirror sync risk as the cost of two languages.
 - `chat` — `{text}`. Server stamps timestamp.
 - `guess` — `{word}`. Server validates + scores.
 - `newGame` — `{config}`. Any member can initiate; rejected if not all
-  members online.
+  members online or if a proposal / review is already pending. Does
+  not start the game — see *Confirmation gates* below.
+- `gameReady` — ack the pending proposal. The server starts the game
+  only after every member has sent this (the initiator's `newGame`
+  auto-counts as theirs).
+- `cancelProposal` — drop the pending proposal. Any connected member.
+- `reviewDone` — ack the most-recently-ended game's results panel.
+  The next `newGame` is gated until every member has sent this.
 - `endGame` — explicit end (only meaningful when the game has no timer).
   Any member can send.
 
 **Server → client:**
 - `clubState` — full snapshot on connect: members, chat history, current
-  game (if any), recent game-history summary.
+  game (if any), pending proposal / review (if any), recent game-history
+  summary.
 - `chatMessage` — incremental chat.
 - `memberPresence` — `{user_id, online}`.
+- `proposalUpdate` — `{proposal: {config, initiator_id, ready_user_ids} | null}`.
+  Open / update / clear of the pending-proposal state.
 - `gameStarted` — `{game_id, board, ends_at (nullable), config}`.
 - `guessAccepted` — to the guesser only — `{word, points}`. Used in
   **competitive** mode.
@@ -215,8 +225,22 @@ We accept hand-mirror sync risk as the cost of two languages.
   has already expired; the WS handler should also broadcast
   `gameEnded` if that hasn't happened yet).
 - `gameEnded` — `{results}` (per-player word lists with the configured
-  scoring rules applied — dupes-cancel respected per `config`).
+  scoring rules applied — dupes-cancel respected per `config`). Always
+  followed by a `reviewUpdate` opening the review phase.
+- `reviewUpdate` — `{review: {done_user_ids} | null}`. Open / update /
+  clear of the pending-review state.
 - `feedback` — `{id, text, level}` for short toasts.
+
+### Confirmation gates
+
+Both flows live in memory on the server (`_pending_proposals` /
+`_pending_reviews`) — a process restart wipes them. The gate is
+**"block on offline"**: a member who's not currently connected at
+the moment a phase opens stays un-acked, and the only way to clear
+a stuck proposal is `cancelProposal`. Review has no cancel by design
+— if someone goes AFK, others coordinate out-of-band. Reconnecting
+members see the current phase on their `clubState` snapshot and can
+ack from the resumed UI.
 
 ## Game rules
 

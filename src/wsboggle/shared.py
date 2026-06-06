@@ -99,6 +99,15 @@ class ClubSummary(BaseModel):
     """ISO timestamp of the most recent game in this club, or
     ``None`` if no games yet."""
 
+    in_flight: Literal["playing", "proposing", "reviewing"] | None = None
+    """Set when there's something happening *right now* in this club:
+    an active game (``playing``), a pending proposal awaiting Ready
+    clicks (``proposing``), or an end-of-game results panel awaiting
+    Done clicks (``reviewing``). Used by the home page to warn the
+    viewer before they start a solo game while owing something to a
+    club. ``None`` on the freshly-created-from-POST path (no in-flight
+    state can exist for a brand-new club)."""
+
 
 class MeResponse(BaseModel):
     """Payload for ``GET /api/me``. The home page's single load."""
@@ -463,8 +472,33 @@ class CEndGame(BaseModel):
     type: Literal["endGame"] = "endGame"
 
 
+class CGameReady(BaseModel):
+    """Confirm readiness for the pending proposal. A no-op if there's
+    no pending proposal (the server replies with a feedback toast)."""
+
+    type: Literal["gameReady"] = "gameReady"
+
+
+class CCancelProposal(BaseModel):
+    """Cancel the pending proposal. Any connected member can send —
+    the gate is "block on offline," so a stuck proposal can always be
+    aborted by anyone still in the club."""
+
+    type: Literal["cancelProposal"] = "cancelProposal"
+
+
+class CReviewDone(BaseModel):
+    """Mark the sender as done reviewing the most-recently-ended
+    game. New games are gated until every member has sent this."""
+
+    type: Literal["reviewDone"] = "reviewDone"
+
+
 ClientMessage = Annotated[
-    Union[CHello, CChat, CNewGame, CGuess, CEndGame],
+    Union[
+        CHello, CChat, CNewGame, CGuess, CEndGame,
+        CGameReady, CCancelProposal, CReviewDone,
+    ],
     Field(discriminator="type"),
 ]
 """Everything the client can send over the club WS."""
@@ -500,6 +534,31 @@ class SClubState(BaseModel):
     chat: list[ChatMessage]
     current_game: "GameSnapshot | None" = None
     last_config: "GameConfig | None" = None
+    # Ephemeral confirmation states. Cleared by a server restart.
+    pending_proposal: "PendingProposal | None" = None
+    pending_review: "PendingReview | None" = None
+
+
+class PendingProposal(BaseModel):
+    """A game has been proposed but not all members have clicked
+    Ready. Carried on the initial ``clubState`` snapshot (so mid-flow
+    reconnects see the prompt) and on ``proposalUpdate`` deltas.
+
+    ``ready_user_ids`` always includes the initiator (clicking Start
+    counts as their ready). Order is not significant; the client
+    treats it as a set.
+    """
+
+    config: "GameConfig"
+    initiator_id: int
+    ready_user_ids: list[int]
+
+
+class PendingReview(BaseModel):
+    """The most-recently-ended game's results are being reviewed.
+    No new game can start until every member has clicked Done."""
+
+    done_user_ids: list[int]
 
 
 class SChatMessage(BaseModel):
@@ -598,10 +657,33 @@ class SGuessRejected(BaseModel):
 class SGameEnded(BaseModel):
     """The current game has ended — timer expired (v1) or a
     manual end fired (v2). Broadcast to every member; carries the
-    full end-of-game result with all players' word lists revealed."""
+    full end-of-game result with all players' word lists revealed.
+
+    Implicitly opens a review phase — the server emits a
+    ``reviewUpdate`` with an empty ``done_user_ids`` immediately
+    after this. The client may treat ``gameEnded`` itself as the
+    "review opens" signal if convenient.
+    """
 
     type: Literal["gameEnded"] = "gameEnded"
     result: "GameResult"
+
+
+class SProposalUpdate(BaseModel):
+    """The pending-proposal state changed. ``proposal=None`` means
+    the proposal was resolved — either cancelled, or all members
+    readied and a ``gameStarted`` is on its way."""
+
+    type: Literal["proposalUpdate"] = "proposalUpdate"
+    proposal: "PendingProposal | None"
+
+
+class SReviewUpdate(BaseModel):
+    """The pending-review state changed. ``review=None`` means every
+    member has clicked Done; the club is free to start a new game."""
+
+    type: Literal["reviewUpdate"] = "reviewUpdate"
+    review: "PendingReview | None"
 
 
 ServerMessage = Annotated[
@@ -615,6 +697,8 @@ ServerMessage = Annotated[
         SGuessSubmitted,
         SGuessRejected,
         SGameEnded,
+        SProposalUpdate,
+        SReviewUpdate,
     ],
     Field(discriminator="type"),
 ]

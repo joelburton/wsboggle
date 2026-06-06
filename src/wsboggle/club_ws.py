@@ -49,14 +49,19 @@ from pydantic import TypeAdapter, ValidationError
 from wsboggle import auth, chat, clubs, games
 from wsboggle.deps import SESSION_COOKIE_NAME
 from wsboggle.shared import (
+    CCancelProposal,
     CChat,
     CEndGame,
+    CGameReady,
     CGuess,
     CHello,
     CNewGame,
+    CReviewDone,
     ChatMessage,
     ClientMessage,
     ClubMember,
+    PendingProposal,
+    PendingReview,
     SChatMessage,
     SClubState,
     SFeedback,
@@ -66,6 +71,8 @@ from wsboggle.shared import (
     SGuessRejected,
     SGuessSubmitted,
     SMemberPresence,
+    SProposalUpdate,
+    SReviewUpdate,
     ServerMessage,
 )
 
@@ -96,6 +103,20 @@ _lock = asyncio.Lock()
 # when the game's ``ends_at`` elapses.
 _timers: dict[int, asyncio.Task[None]] = {}
 _game_lock = asyncio.Lock()
+
+# Per-club pending proposal. A ``newGame`` no longer starts a game
+# directly — it parks here until every member has clicked Ready, at
+# which point the proposal is resolved and ``gameStarted`` fires.
+# Lives in memory only; a server restart drops it (the initiator
+# will have to Start again).
+_pending_proposals: dict[int, PendingProposal] = {}
+
+# Per-club pending review. Opens implicitly when a game ends, closes
+# when every member has clicked "Done reviewing". While open, no new
+# game can be proposed. Same in-memory lifetime as proposals — a
+# restart wipes it; whoever reconnects sees no review pending and the
+# club is free to start a new game.
+_pending_reviews: dict[int, PendingReview] = {}
 
 
 def _ts_validate_client_message(raw: Any) -> ClientMessage:
@@ -293,6 +314,8 @@ async def club_socket(ws: WebSocket, club_id: int) -> None:
                 chat=chat.history(db, club_id),
                 current_game=current_game,
                 last_config=games.find_last_club_config(db, club_id),
+                pending_proposal=_pending_proposals.get(club_id),
+                pending_review=_pending_reviews.get(club_id),
             ),
         )
         if first_socket:
@@ -351,6 +374,15 @@ async def _recv_loop(
         if isinstance(msg, CNewGame):
             await _handle_new_game(ws, db, club_id=club_id, user=user, msg=msg)
             continue
+        if isinstance(msg, CGameReady):
+            await _handle_game_ready(ws, db, club_id=club_id, user=user)
+            continue
+        if isinstance(msg, CCancelProposal):
+            await _handle_cancel_proposal(ws, club_id=club_id)
+            continue
+        if isinstance(msg, CReviewDone):
+            await _handle_review_done(ws, db, club_id=club_id, user=user)
+            continue
         if isinstance(msg, CGuess):
             await _handle_guess(ws, db, club_id=club_id, user=user, msg=msg)
             continue
@@ -386,6 +418,35 @@ async def _handle_chat(
 # --- Game flow ------------------------------------------------------------
 
 
+def _club_member_ids(db: sqlite3.Connection, club_id: int) -> set[int]:
+    """Set of user_ids that belong to a club. Membership is fixed at
+    club creation (no add / remove path in v1), so this can be
+    re-read whenever needed without caching."""
+    return {
+        row["user_id"]
+        for row in db.execute(
+            "SELECT user_id FROM clubs_users WHERE club_id = ?", (club_id,)
+        ).fetchall()
+    }
+
+
+def in_flight_phase(club_id: int) -> str | None:
+    """Return the in-memory phase for ``club_id``, or ``None`` if no
+    pending state.
+
+    Used by ``/api/me`` to warn the home page when the viewer owes
+    something to a club. Reads happen without the lock — the snapshot
+    can be stale by the time the caller acts on it, but for an HTTP
+    indicator that's fine: the worst case is one stale frame before
+    the next reload.
+    """
+    if club_id in _pending_proposals:
+        return "proposing"
+    if club_id in _pending_reviews:
+        return "reviewing"
+    return None
+
+
 async def _handle_new_game(
     ws: WebSocket,
     db: sqlite3.Connection,
@@ -394,19 +455,21 @@ async def _handle_new_game(
     user: auth.User,
     msg: CNewGame,
 ) -> None:
-    """Start a new game for the club.
+    """Propose a new game for the club.
 
-    Preconditions checked here (in order, fail-fast):
+    The proposal is parked in :data:`_pending_proposals` until every
+    member has clicked Ready; that's when the game is actually
+    created and ``gameStarted`` broadcasts. Preconditions:
 
     1. No game is currently active in the club.
-    2. Every club member is currently in-club (= registered with
-       at least one socket).
-    3. The supplied config validates (known dice set, ladder, etc.).
+    2. No proposal is already pending.
+    3. Every member is currently in-club (otherwise the proposal
+       would block forever waiting on an offline player to click).
+    4. The supplied config validates.
 
-    The check-and-insert pair runs under :data:`_game_lock` so two
-    near-simultaneous ``newGame`` messages can't both succeed. Each
-    failure is a per-sender ``feedback`` toast — we don't want to
-    spam the whole club about one user's botched click.
+    On success, the proposal is stored with the initiator already
+    marked ready (clicking Start counts as their ready signal) and
+    every member's socket receives ``proposalUpdate``.
     """
     async with _game_lock:
         if games.find_active_club_game(db, club_id) is not None:
@@ -415,16 +478,30 @@ async def _handle_new_game(
             )
             return
 
+        if club_id in _pending_proposals:
+            await _send(
+                ws,
+                SFeedback(
+                    text="A game has already been proposed.", level="warn"
+                ),
+            )
+            return
+
+        if club_id in _pending_reviews:
+            await _send(
+                ws,
+                SFeedback(
+                    text="Waiting for everyone to finish reviewing.",
+                    level="warn",
+                ),
+            )
+            return
+
         # All-online check. Read the registry under its own lock so
         # we see a consistent snapshot.
         async with _lock:
             online_ids = set((_registry.get(club_id) or {}).keys())
-        all_member_ids = {
-            row["user_id"]
-            for row in db.execute(
-                "SELECT user_id FROM clubs_users WHERE club_id = ?", (club_id,)
-            ).fetchall()
-        }
+        all_member_ids = _club_member_ids(db, club_id)
         missing = all_member_ids - online_ids
         if missing:
             await _send(
@@ -442,32 +519,98 @@ async def _handle_new_game(
             await _send(ws, SFeedback(text=str(e), level="warn"))
             return
 
-        try:
-            state = games.start_game(
-                db,
-                club_id=club_id,
-                created_by=user.id,
-                config=msg.config,
+        proposal = PendingProposal(
+            config=msg.config,
+            initiator_id=user.id,
+            ready_user_ids=[user.id],
+        )
+        _pending_proposals[club_id] = proposal
+
+    await _broadcast(club_id, SProposalUpdate(proposal=proposal))
+
+
+async def _handle_game_ready(
+    ws: WebSocket,
+    db: sqlite3.Connection,
+    *,
+    club_id: int,
+    user: auth.User,
+) -> None:
+    """Mark ``user`` as ready on the pending proposal.
+
+    If this completes the set, the proposal is resolved: the game is
+    created via :func:`games.start_game`, the timer task scheduled,
+    and ``gameStarted`` broadcast. Otherwise an updated
+    ``proposalUpdate`` goes out so peers can render the waiting roster.
+
+    A ready click from a user already in ``ready_user_ids`` is a
+    silent no-op (no broadcast, no feedback). If the board generator
+    can't satisfy the "good board" constraints, the proposal is
+    dropped and everyone gets a feedback toast — the alternative is
+    a stuck prompt with no way forward.
+    """
+    started_state: games.GameState | None = None
+    updated_proposal: PendingProposal | None = None
+    start_error: str | None = None
+
+    async with _game_lock:
+        proposal = _pending_proposals.get(club_id)
+        if proposal is None:
+            await _send(
+                ws, SFeedback(text="No game has been proposed.", level="warn")
             )
-        except RuntimeError as e:
-            # libwords couldn't satisfy the "good board" constraints
-            # within max_tries. Tell the user, don't crash.
-            await _send(ws, SFeedback(text=str(e), level="warn"))
+            return
+        if user.id in proposal.ready_user_ids:
+            return
+        proposal.ready_user_ids.append(user.id)
+
+        all_member_ids = _club_member_ids(db, club_id)
+        if set(proposal.ready_user_ids) >= all_member_ids:
+            try:
+                started_state = games.start_game(
+                    db,
+                    club_id=club_id,
+                    created_by=proposal.initiator_id,
+                    config=proposal.config,
+                )
+                if started_state.ends_at is not None:
+                    _timers[club_id] = asyncio.create_task(
+                        _run_timer(
+                            ws.app, club_id, started_state.id, started_state.ends_at
+                        )
+                    )
+            except RuntimeError as e:
+                start_error = str(e)
+            del _pending_proposals[club_id]
+        else:
+            updated_proposal = proposal
+
+    if started_state is not None:
+        await _broadcast(club_id, SProposalUpdate(proposal=None))
+        await _broadcast_game_started(db, club_id, started_state)
+    elif start_error is not None:
+        await _broadcast(club_id, SProposalUpdate(proposal=None))
+        await _broadcast(club_id, SFeedback(text=start_error, level="warn"))
+    elif updated_proposal is not None:
+        await _broadcast(club_id, SProposalUpdate(proposal=updated_proposal))
+
+
+async def _handle_cancel_proposal(
+    ws: WebSocket,
+    *,
+    club_id: int,
+) -> None:
+    """Drop the pending proposal. Any connected member can cancel —
+    "block on offline" leaves the proposal stuck until someone
+    explicitly aborts it (or every member happens to click Ready)."""
+    async with _game_lock:
+        if _pending_proposals.pop(club_id, None) is None:
+            await _send(
+                ws, SFeedback(text="No game has been proposed.", level="warn")
+            )
             return
 
-        # Schedule the server-side timer before announcing the
-        # game; in the (impossible-without-bugs) case that the timer
-        # fires immediately, gameEnded still arrives after
-        # gameStarted because asyncio dispatches them in order.
-        if state.ends_at is not None:
-            _timers[club_id] = asyncio.create_task(
-                _run_timer(ws.app, club_id, state.id, state.ends_at)
-            )
-
-    # Broadcast outside the lock — sending to every socket can take
-    # arbitrarily long on a slow peer; we don't want it blocking the
-    # next ``newGame`` attempt.
-    await _broadcast_game_started(db, club_id, state)
+    await _broadcast(club_id, SProposalUpdate(proposal=None))
 
 
 async def _broadcast_game_started(
@@ -565,13 +708,56 @@ async def _handle_guess(
 async def _end_and_broadcast(
     db: sqlite3.Connection, club_id: int, state: games.GameState
 ) -> None:
-    """End ``state`` in the DB (if not already) and broadcast
-    ``gameEnded`` to every socket in the club. Idempotent against
-    a game that's already ended (re-end is a no-op in
-    :func:`games.end_game`)."""
+    """End ``state`` in the DB (if not already), open the review
+    phase, and broadcast ``gameEnded`` + ``reviewUpdate`` to every
+    socket in the club. Idempotent against a game that's already
+    ended (re-end is a no-op in :func:`games.end_game`).
+
+    The review phase gates the next ``newGame`` until every member
+    has acked Done."""
     state = games.end_game(db, state)
     result = games.build_result(db, state)
+    async with _game_lock:
+        review = PendingReview(done_user_ids=[])
+        _pending_reviews[club_id] = review
     await _broadcast(club_id, SGameEnded(result=result))
+    await _broadcast(club_id, SReviewUpdate(review=review))
+
+
+async def _handle_review_done(
+    ws: WebSocket,
+    db: sqlite3.Connection,
+    *,
+    club_id: int,
+    user: auth.User,
+) -> None:
+    """Mark ``user`` as done reviewing. If this completes the set,
+    the review is cleared and a ``reviewUpdate(None)`` broadcasts —
+    the club is free to start a new game.
+
+    Sending without a pending review is a silent no-op (common
+    race: server cleared the review just as the user clicked Done,
+    or the result panel was reopened from a stale tab)."""
+    updated: PendingReview | None = None
+    cleared = False
+    async with _game_lock:
+        review = _pending_reviews.get(club_id)
+        if review is None:
+            return
+        if user.id in review.done_user_ids:
+            return
+        review.done_user_ids.append(user.id)
+        all_member_ids = _club_member_ids(db, club_id)
+        if set(review.done_user_ids) >= all_member_ids:
+            del _pending_reviews[club_id]
+            cleared = True
+        else:
+            updated = review
+
+    if cleared:
+        await _broadcast(club_id, SReviewUpdate(review=None))
+    elif updated is not None:
+        await _broadcast(club_id, SReviewUpdate(review=updated))
 
 
 # --- Manual end ----------------------------------------------------------

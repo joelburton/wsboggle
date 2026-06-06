@@ -33,6 +33,12 @@ button:disabled              { background: #94a3b8; cursor: not-allowed; }
 button.secondary             { background: #e5e7eb; color: #1f2937; }
 button.secondary:hover:not(:disabled) { background: #d1d5db; }
 
+/* ConfirmButton's armed state — warmer color so the second click
+   reads as the consequential one. Applies to any button regardless
+   of secondary/primary class. */
+button[data-armed="true"]              { background: #b91c1c; color: white; }
+button[data-armed="true"]:hover:not(:disabled) { background: #991b1b; }
+
 input, select {
   font: inherit;
   padding: 0.5rem;

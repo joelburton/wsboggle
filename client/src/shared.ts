@@ -42,6 +42,13 @@ export type ClubSummary = {
   game_count: number;
   /** ISO timestamp of the most recent game, or null if none yet. */
   last_played_at: string | null;
+  /** Set when there's something happening *right now*: an active
+   *  game (`playing`), a pending proposal (`proposing`), or an
+   *  end-of-game results panel awaiting Done clicks (`reviewing`).
+   *  The home page uses this to surface the club state and to
+   *  confirm before starting a solo game. `null` when nothing is
+   *  in flight. */
+  in_flight: "playing" | "proposing" | "reviewing" | null;
 };
 
 /** Response shape for GET /api/me — the home page's single load. */
@@ -226,7 +233,21 @@ export type CNewGame = { type: "newGame"; config: GameConfig };
 export type CGuess = { type: "guess"; word: string };
 /** End the current game now. Any member can send (per CLAUDE.md). */
 export type CEndGame = { type: "endGame" };
-export type ClientMessage = CHello | CChat | CNewGame | CGuess | CEndGame;
+/** Confirm readiness for the pending proposal. No-op if no proposal. */
+export type CGameReady = { type: "gameReady" };
+/** Cancel the pending proposal. Any connected member can send. */
+export type CCancelProposal = { type: "cancelProposal" };
+/** Mark the sender as done reviewing the most-recently-ended game. */
+export type CReviewDone = { type: "reviewDone" };
+export type ClientMessage =
+  | CHello
+  | CChat
+  | CNewGame
+  | CGuess
+  | CEndGame
+  | CGameReady
+  | CCancelProposal
+  | CReviewDone;
 
 // Server → client
 
@@ -243,6 +264,28 @@ export type SClubState = {
    *  a brand-new club. The club view pre-fills the new-game dialog
    *  from this and shows a one-click "Play again". */
   last_config: GameConfig | null;
+  /** Set when a game has been proposed but not yet started — the
+   *  connecting client should render the Ready prompt. */
+  pending_proposal: PendingProposal | null;
+  /** Set when the most-recently-ended game is being reviewed and
+   *  no new game can start until every member has clicked Done. */
+  pending_review: PendingReview | null;
+};
+
+/** A proposed game waiting for member readiness. Carried on the
+ *  initial `clubState` snapshot and on `proposalUpdate` deltas. */
+export type PendingProposal = {
+  config: GameConfig;
+  initiator_id: number;
+  /** Always includes `initiator_id`. Treat as a set; order isn't
+   *  significant. */
+  ready_user_ids: number[];
+};
+
+/** The most-recently-ended game is being reviewed. New games are
+ *  gated until every member's user_id is in `done_user_ids`. */
+export type PendingReview = {
+  done_user_ids: number[];
 };
 
 export type SChatMessage = {
@@ -300,6 +343,21 @@ export type SGameEnded = {
   result: GameResult;
 };
 
+/** The pending-proposal state changed. `proposal=null` means the
+ *  proposal was either resolved (a `gameStarted` will follow) or
+ *  cancelled. */
+export type SProposalUpdate = {
+  type: "proposalUpdate";
+  proposal: PendingProposal | null;
+};
+
+/** The pending-review state changed. `review=null` means every
+ *  member has clicked Done. */
+export type SReviewUpdate = {
+  type: "reviewUpdate";
+  review: PendingReview | null;
+};
+
 export type ServerMessage =
   | SClubState
   | SChatMessage
@@ -309,4 +367,6 @@ export type ServerMessage =
   | SGuessAccepted
   | SGuessSubmitted
   | SGuessRejected
-  | SGameEnded;
+  | SGameEnded
+  | SProposalUpdate
+  | SReviewUpdate;

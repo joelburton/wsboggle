@@ -71,6 +71,12 @@
   text-align: center;
 }
 
+.resultActions {
+  margin-top: 2rem;
+  display: flex;
+  gap: 0.75rem;
+}
+
 .loading {
   padding: 2rem;
   text-align: center;

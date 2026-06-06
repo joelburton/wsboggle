@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { navigate } from "../routing";
 import type { GameResult } from "../shared";
 import { Board } from "./Board";
 import { colorForHandle } from "../colors";
@@ -168,12 +167,6 @@ export function GameResultPanel({ result, viewerUserId }: Props) {
         )}
       </div>
 
-      <div className={styles.actions}>
-        <button onClick={() => navigate("/solo")}>New game</button>
-        <button className="secondary" onClick={() => navigate("/")}>
-          Home
-        </button>
-      </div>
     </div>
   );
 }

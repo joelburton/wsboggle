@@ -29,18 +29,22 @@ import {
 } from "react";
 import { api, ApiError } from "../api";
 import { useClubSocket, type LocalGuessRecord } from "../clubSocket";
-import { Link } from "../routing";
+import { Link, navigate } from "../routing";
 import type {
   ChatMessage,
   ClubGameSummary,
+  ClubMember,
   ClubSummary,
   GameConfig,
   GameResult,
   GameSnapshot,
   GuessResponse,
   MeResponse,
+  PendingProposal,
+  PendingReview,
 } from "../shared";
 import { BoardStats } from "./BoardStats";
+import { ConfirmButton } from "./ConfirmButton";
 import { RotatableBoard } from "./RotatableBoard";
 import { ChatPanel as FloatingChatPanel, ChatIndicator } from "./ChatPanel";
 import { GameConstraints, EMPTY_CONSTRAINTS, type Constraints } from "./GameConstraints";
@@ -64,6 +68,9 @@ export function ClubPage({ clubId, me }: Props) {
     state,
     sendChat,
     sendNewGame,
+    sendGameReady,
+    sendCancelProposal,
+    sendReviewDone,
     sendGuess,
     sendEndGame,
     clearResult,
@@ -75,6 +82,9 @@ export function ClubPage({ clubId, me }: Props) {
   // Floating chat state. Only meaningful when the view is "playing"
   // or "result" (the main club view has inline chat always visible).
   const [chatOpen, setChatOpen] = useState(false);
+  // "Leave the club?" confirm — armed by the ← Home link when the
+  // viewer is mid-game or has an outstanding ready / review ack.
+  const [leaveConfirm, setLeaveConfirm] = useState(false);
   // Last chat id the user has "seen" — anything beyond this is
   // counted as unread on the reopen badge. Bumped to the latest id
   // whenever the panel is open and a new line lands, and on open.
@@ -189,11 +199,33 @@ export function ClubPage({ clubId, me }: Props) {
       ? colorForHandle(unreadMessages[unreadMessages.length - 1].handle)
       : null;
 
+  // The viewer owes something to the club if there's an active game,
+  // a result panel they haven't acked, or an open proposal/review
+  // they're a member of and haven't acked. In any of those, clicking
+  // "← Home" pops a confirm so they don't ghost the club by accident.
+  const viewerOwesClub =
+    mode === "playing" ||
+    mode === "result" ||
+    (state.pendingReview !== null &&
+      !state.pendingReview.done_user_ids.includes(me.user.id)) ||
+    (state.pendingProposal !== null &&
+      !state.pendingProposal.ready_user_ids.includes(me.user.id));
+
   return (
     <div className={styles.wrapper}>
       <header className={styles.header}>
         <h1>{state.clubName}</h1>
-        <Link to="/">← Home</Link>
+        <Link
+          to="/"
+          onClick={(e) => {
+            if (viewerOwesClub) {
+              e.preventDefault();
+              setLeaveConfirm(true);
+            }
+          }}
+        >
+          ← Home
+        </Link>
       </header>
 
       {!state.connected && (
@@ -208,7 +240,14 @@ export function ClubPage({ clubId, me }: Props) {
             <ResultView
               result={state.gameResult}
               viewerUserId={me.user.id}
-              onDismiss={clearResult}
+              alreadyAcked={
+                state.pendingReview?.done_user_ids.includes(me.user.id) ??
+                true
+              }
+              onDone={() => {
+                sendReviewDone();
+                clearResult();
+              }}
             />
           )}
           {mode === "playing" && state.currentGame !== null && (
@@ -230,7 +269,10 @@ export function ClubPage({ clubId, me }: Props) {
               history={history}
               historyError={historyError}
               lastConfig={state.lastConfig}
+              proposalPending={state.pendingProposal !== null}
+              reviewPending={state.pendingReview}
               onStart={sendNewGame}
+              onReviewDone={sendReviewDone}
             />
           )}
         </div>
@@ -272,6 +314,132 @@ export function ClubPage({ clubId, me }: Props) {
           />
         </>
       )}
+
+      {state.pendingProposal !== null && (
+        <ProposalPrompt
+          proposal={state.pendingProposal}
+          myUserId={me.user.id}
+          members={state.members}
+          onReady={sendGameReady}
+          onCancel={sendCancelProposal}
+        />
+      )}
+
+      {leaveConfirm && (
+        <LeaveClubConfirm
+          mode={mode}
+          clubName={state.clubName}
+          onCancel={() => setLeaveConfirm(false)}
+          onLeave={() => {
+            setLeaveConfirm(false);
+            navigate("/");
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// --- Leave-club confirm -------------------------------------------------
+
+type LeaveClubConfirmProps = {
+  mode: "main" | "playing" | "result";
+  clubName: string;
+  onCancel: () => void;
+  onLeave: () => void;
+};
+
+/** Two-button confirm for the "← Home" link. The wording varies by
+ *  mode so the viewer knows what they'd be walking away from — an
+ *  active game ("the timer is still running") vs. a pending ack
+ *  ("your teammates are waiting on you"). */
+function LeaveClubConfirm({ mode, clubName, onCancel, onLeave }: LeaveClubConfirmProps) {
+  const body =
+    mode === "playing"
+      ? `A game is in progress in ${clubName}. The timer keeps running whether you're here or not, but you won't be able to add words while you're gone.`
+      : mode === "result"
+      ? `${clubName} is reviewing the last game's results. Your teammates won't be able to start a new game until you click "Done reviewing".`
+      : `${clubName} is waiting on you. You can come back to ack any time.`;
+  return (
+    <div className={styles.dialogBackdrop} onClick={onCancel}>
+      <div className={styles.dialog} onClick={(e) => e.stopPropagation()}>
+        <h3>Leave {clubName}?</h3>
+        <p style={{ margin: "0 0 1rem 0", color: "#374151" }}>{body}</p>
+        <div className={styles.dialogActions}>
+          <button type="button" className="secondary" onClick={onCancel} autoFocus>
+            Stay
+          </button>
+          <button type="button" onClick={onLeave}>
+            Leave
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Ready-to-start prompt ----------------------------------------------
+
+type ProposalPromptProps = {
+  proposal: PendingProposal;
+  myUserId: number;
+  members: ClubMember[];
+  onReady: () => void;
+  onCancel: () => void;
+};
+
+/** Modal-style overlay shown while a proposal is pending. Renders the
+ *  same on every member's screen — the initiator just sees themselves
+ *  in the "ready" list and has no Ready button to click.
+ *
+ *  No backdrop dismiss (clicking outside doesn't cancel) — cancellation
+ *  is consequential enough that we want an explicit button. Esc could
+ *  cancel too, but for now we leave that out for symmetry with the
+ *  "no unasked confirms" feel: explicit only.
+ */
+function ProposalPrompt({
+  proposal, myUserId, members, onReady, onCancel,
+}: ProposalPromptProps) {
+  const initiator = members.find((m) => m.user_id === proposal.initiator_id);
+  const initiatorLabel =
+    proposal.initiator_id === myUserId
+      ? "You"
+      : initiator?.handle ?? `user ${proposal.initiator_id}`;
+
+  const readySet = new Set(proposal.ready_user_ids);
+  const youAreReady = readySet.has(myUserId);
+  const waitingOn = members
+    .filter((m) => !readySet.has(m.user_id))
+    .map((m) => m.handle);
+
+  return (
+    <div className={styles.dialogBackdrop}>
+      <div className={styles.dialog}>
+        <h3>
+          {initiatorLabel === "You"
+            ? "Waiting for everyone to be ready"
+            : `${initiatorLabel} wants to start a game`}
+        </h3>
+        <p style={{ margin: "0 0 0.5rem 0", color: "#374151" }}>
+          {describeConfig(proposal.config)}
+          {" · "}min word length {proposal.config.min_legal_length}
+        </p>
+        {waitingOn.length > 0 && (
+          <p style={{ margin: "0 0 1rem 0", color: "#6b7280", fontSize: "0.9rem" }}>
+            Waiting on: {waitingOn.join(", ")}
+          </p>
+        )}
+        <div className={styles.dialogActions}>
+          <button type="button" className="secondary" onClick={onCancel}>
+            Cancel
+          </button>
+          {!youAreReady && (
+            <button type="button" onClick={onReady} autoFocus>
+              Ready
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -287,16 +455,48 @@ type ClubMainProps = {
   history: ClubGameSummary[] | null;
   historyError: string | null;
   lastConfig: GameConfig | null;
+  /** True while a `ProposalPrompt` is on screen — block the start
+   *  buttons so a quick second click can't create a parallel
+   *  proposal attempt. */
+  proposalPending: boolean;
+  /** Non-null while the most-recently-ended game is being reviewed.
+   *  Gates the start buttons until every member has acked. */
+  reviewPending: PendingReview | null;
   onStart: (config: GameConfig) => void;
+  /** Fire `reviewDone` for the viewer. Shown in the main view when
+   *  the viewer hasn't acked yet — covers the reload-mid-review
+   *  case where the result panel is gone but the gate is still up. */
+  onReviewDone: () => void;
 };
 
 function ClubMainView(props: ClubMainProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
-  const disabled = !props.allOnline || !props.connected;
+  const reviewPending = props.reviewPending;
+  const viewerAckedReview =
+    reviewPending === null
+      ? true
+      : reviewPending.done_user_ids.includes(props.me.user.id);
+  const reviewWaitingOn =
+    reviewPending !== null
+      ? props.members
+          .filter((m) => !reviewPending.done_user_ids.includes(m.user_id))
+          .map((m) => m.handle)
+      : [];
+  const disabled =
+    !props.allOnline ||
+    !props.connected ||
+    props.proposalPending ||
+    reviewPending !== null;
   const disabledReason = !props.connected
     ? "Reconnect to start a game."
     : !props.allOnline
     ? "Waiting for everyone to be in the club."
+    : props.proposalPending
+    ? "A game is being proposed."
+    : !viewerAckedReview
+    ? "You haven't finished reviewing the last game yet."
+    : reviewWaitingOn.length > 0
+    ? `Waiting on ${reviewWaitingOn.join(", ")} to finish reviewing.`
     : null;
 
   return (
@@ -344,6 +544,11 @@ function ClubMainView(props: ClubMainProps) {
           >
             {props.lastConfig !== null ? "New game…" : "▶ New game…"}
           </button>
+          {!viewerAckedReview && (
+            <button className="secondary" onClick={props.onReviewDone}>
+              Done reviewing
+            </button>
+          )}
           {disabledReason && (
             <span className={styles.disabledNote}>{disabledReason}</span>
           )}
@@ -685,9 +890,12 @@ function PlayView({ snapshot, guesses, myUserId, onGuess, onEndGame }: PlayProps
             <WordEntry onSubmit={onGuess} />
           </div>
           <div className={styles.endRow}>
-            <button className="secondary" onClick={onEndGame}>
-              End game
-            </button>
+            <ConfirmButton
+              className="secondary"
+              onConfirm={onEndGame}
+              idleLabel="End game"
+              confirmLabel="Click again to end"
+            />
           </div>
         </div>
         <div className={styles.rightCol}>
@@ -712,15 +920,21 @@ function PlayView({ snapshot, guesses, myUserId, onGuess, onEndGame }: PlayProps
 type ResultProps = {
   result: GameResult;
   viewerUserId: number;
-  onDismiss: () => void;
+  /** True if the viewer has already sent reviewDone — they're past
+   *  the gate and the button switches to a plain "Return to club"
+   *  (no second reviewDone, just a local clear). */
+  alreadyAcked: boolean;
+  onDone: () => void;
 };
 
-function ResultView({ result, viewerUserId, onDismiss }: ResultProps) {
+function ResultView({ result, viewerUserId, alreadyAcked, onDone }: ResultProps) {
   return (
     <section className={styles.section}>
       <GameResultPanel result={result} viewerUserId={viewerUserId} />
       <div className={styles.resultActions}>
-        <button onClick={onDismiss}>Return to club</button>
+        <button onClick={onDone}>
+          {alreadyAcked ? "Return to club" : "Done reviewing"}
+        </button>
       </div>
     </section>
   );

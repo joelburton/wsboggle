@@ -26,6 +26,8 @@ import type {
   GameSnapshot,
   GuessRecord,
   GuessResponse,
+  PendingProposal,
+  PendingReview,
   ServerMessage,
 } from "./shared";
 
@@ -77,6 +79,15 @@ export type ClubSocketState = {
    *  becomes the "last"). */
   lastConfig: GameConfig | null;
 
+  /** A game has been proposed and is waiting for member readiness.
+   *  When non-null, the club view renders the Ready prompt on top
+   *  of the main view; when it transitions back to null the prompt
+   *  vanishes (the next event will usually be `gameStarted`). */
+  pendingProposal: PendingProposal | null;
+  /** The most-recently-ended game is being reviewed. New-game button
+   *  is gated until this transitions back to null. */
+  pendingReview: PendingReview | null;
+
   /** Transient toasts queued by server `feedback`; consumer is
    *  expected to render + clear. */
   feedback: { id: number; text: string; level: "info" | "warn" | "error" }[];
@@ -100,6 +111,8 @@ const initialState: ClubSocketState = {
   yourGuesses: [],
   gameResult: null,
   lastConfig: null,
+  pendingProposal: null,
+  pendingReview: null,
   feedback: [],
 };
 
@@ -132,6 +145,8 @@ function reducer(state: ClubSocketState, action: Action): ClubSocketState {
             yourGuesses: msg.current_game?.your_guesses ?? [],
             gameResult: null,
             lastConfig: msg.last_config,
+            pendingProposal: msg.pending_proposal,
+            pendingReview: msg.pending_review,
           };
         case "chatMessage":
           return { ...state, chat: [...state.chat, msg.message] };
@@ -157,7 +172,17 @@ function reducer(state: ClubSocketState, action: Action): ClubSocketState {
             yourGuesses: msg.snapshot.your_guesses,
             gameResult: null,
             lastConfig: msg.snapshot.config,
+            // The proposal that produced this game has already been
+            // cleared by a prior `proposalUpdate`, but belt and
+            // suspenders in case the server skips that for some
+            // reason. Same for any stale review state.
+            pendingProposal: null,
+            pendingReview: null,
           };
+        case "proposalUpdate":
+          return { ...state, pendingProposal: msg.proposal };
+        case "reviewUpdate":
+          return { ...state, pendingReview: msg.review };
         case "guessAccepted": {
           // In competitive mode this is the only "your guess was
           // recorded" channel — append legal + illegal-but-shown
@@ -224,7 +249,17 @@ function wsUrl(clubId: number): string {
 export type ClubSocketHandle = {
   state: ClubSocketState;
   sendChat: (text: string) => void;
+  /** Propose a new game. The server parks the proposal until every
+   *  member clicks Ready; only then is `gameStarted` broadcast. */
   sendNewGame: (config: GameConfig) => void;
+  /** Confirm readiness for the pending proposal. */
+  sendGameReady: () => void;
+  /** Cancel the pending proposal. Any connected member can send. */
+  sendCancelProposal: () => void;
+  /** Mark the viewer as done reviewing the most-recently-ended
+   *  game. When everyone has done so the server clears the
+   *  pending review and new games can be proposed again. */
+  sendReviewDone: () => void;
   /** Submit a guess; resolves with the server's verdict translated
    *  into the same `GuessResponse` shape the solo HTTP path uses,
    *  so the `WordEntry` component plugs in unchanged. */
@@ -355,6 +390,24 @@ export function useClubSocket(clubId: number, myUserId: number): ClubSocketHandl
     send(ws, { type: "endGame" });
   }
 
+  function sendGameReady() {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    send(ws, { type: "gameReady" });
+  }
+
+  function sendCancelProposal() {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    send(ws, { type: "cancelProposal" });
+  }
+
+  function sendReviewDone() {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    send(ws, { type: "reviewDone" });
+  }
+
   function sendGuess(word: string): Promise<GuessResponse> {
     const normalized = word.trim().toLowerCase();
     const ws = wsRef.current;
@@ -386,6 +439,9 @@ export function useClubSocket(clubId: number, myUserId: number): ClubSocketHandl
     state,
     sendChat,
     sendNewGame,
+    sendGameReady,
+    sendCancelProposal,
+    sendReviewDone,
     sendGuess,
     sendEndGame,
     clearResult,

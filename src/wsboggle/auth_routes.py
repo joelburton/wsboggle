@@ -12,7 +12,7 @@ import sqlite3
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-from wsboggle import auth, clubs
+from wsboggle import auth, clubs, games
 from wsboggle.config import settings
 from wsboggle.deps import SESSION_COOKIE_NAME, get_db, require_user
 from wsboggle.shared import (
@@ -48,10 +48,31 @@ def _clear_session_cookie(response: Response) -> None:
 
 
 def _build_me(db: sqlite3.Connection, user: auth.User) -> MeResponse:
-    """Assemble the ``MeResponse`` (user + clubs)."""
+    """Assemble the ``MeResponse`` (user + clubs).
+
+    Layers per-club ``in_flight`` state on top: ``"playing"`` (active
+    game in the DB) wins over ``"proposing"`` / ``"reviewing"`` (only
+    one phase can be open at a time on the server anyway, but the
+    precedence is explicit here). Used by the home page to warn
+    before the viewer starts a solo game while owing something to a
+    club.
+    """
+    # Lazy-import club_ws to dodge the import cycle
+    # (club_ws → clubs → ..., touched at startup).
+    from wsboggle import club_ws
+
+    club_list = clubs.list_clubs_for_user(db, user.id)
+    active_ids = games.find_active_club_ids(db, [c.id for c in club_list])
+    for club in club_list:
+        if club.id in active_ids:
+            club.in_flight = "playing"
+        else:
+            phase = club_ws.in_flight_phase(club.id)
+            if phase is not None:
+                club.in_flight = phase  # type: ignore[assignment]
     return MeResponse(
         user=PublicUser(id=user.id, handle=user.handle),
-        clubs=clubs.list_clubs_for_user(db, user.id),
+        clubs=club_list,
     )
 
 

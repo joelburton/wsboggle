@@ -27,6 +27,7 @@ import type {
   MeResponse,
 } from "../shared";
 import { BoardStats } from "./BoardStats";
+import { ConfirmButton } from "./ConfirmButton";
 import { RotatableBoard } from "./RotatableBoard";
 import { GameResultPanel } from "./GameResultPanel";
 import { Timer } from "./Timer";
@@ -136,6 +137,12 @@ export function SoloPlayPage({ gameId, me }: Props) {
     return (
       <div className={styles.wrapper}>
         <GameResultPanel result={state.result} viewerUserId={me.user.id} />
+        <div className={styles.resultActions}>
+          <button onClick={() => navigate("/solo")}>New game</button>
+          <button className="secondary" onClick={() => navigate("/")}>
+            Home
+          </button>
+        </div>
       </div>
     );
   }
@@ -164,9 +171,12 @@ export function SoloPlayPage({ gameId, me }: Props) {
             <WordEntry onSubmit={handleSubmit} />
           </div>
           <div className={styles.endAction}>
-            <button className="secondary" onClick={handleEnd}>
-              End game
-            </button>
+            <ConfirmButton
+              className="secondary"
+              onConfirm={handleEnd}
+              idleLabel="End game"
+              confirmLabel="Click again to end"
+            />
           </div>
         </div>
 

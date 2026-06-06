@@ -71,7 +71,11 @@ type LinkProps = {
 };
 
 /** Internal anchor that uses pushState on plain click but lets the
- *  browser handle modifier-clicks (open in new tab, etc.). */
+ *  browser handle modifier-clicks (open in new tab, etc.).
+ *
+ *  ``onClick`` fires *before* navigation; if the handler calls
+ *  ``e.preventDefault()`` the navigation is skipped. Used by gates
+ *  that want to show a confirm modal before leaving the page. */
 export function Link({ to, children, className, onClick }: LinkProps) {
   return (
     <a
@@ -79,9 +83,10 @@ export function Link({ to, children, className, onClick }: LinkProps) {
       className={className}
       onClick={(e) => {
         if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+        onClick?.(e);
+        if (e.defaultPrevented) return;
         e.preventDefault();
         navigate(to);
-        onClick?.(e);
       }}
     >
       {children}

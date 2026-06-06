@@ -1,6 +1,7 @@
+import { useState } from "react";
 import { api } from "../api";
 import { Link, navigate } from "../routing";
-import type { MeResponse } from "../shared";
+import type { ClubSummary, MeResponse } from "../shared";
 import styles from "./HomePage.module.css";
 
 type Props = {
@@ -11,16 +12,30 @@ type Props = {
   onLogout: () => void;
 };
 
-/** Logged-in home page. Solo button is the primary action for the
- *  v1 milestone; the clubs section renders the user's clubs (if
- *  any) but the club page itself isn't built yet. */
+/** Logged-in home page. Solo button is the primary action; the clubs
+ *  list links to each club page. Clubs with in-flight state (active
+ *  game, pending proposal, pending review) show a small badge and
+ *  cause the Solo CTA to confirm before continuing — protects against
+ *  accidentally abandoning a club mid-game by clicking Solo. */
 export function HomePage({ me, onLogout }: Props) {
+  const [soloConfirm, setSoloConfirm] = useState(false);
+
   async function logout() {
     try {
       await api.logout();
     } finally {
       onLogout();
     }
+  }
+
+  const inFlightClubs = me.clubs.filter((c) => c.in_flight !== null);
+
+  function onSoloClick() {
+    if (inFlightClubs.length > 0) {
+      setSoloConfirm(true);
+      return;
+    }
+    navigate("/solo");
   }
 
   return (
@@ -36,10 +51,7 @@ export function HomePage({ me, onLogout }: Props) {
       </header>
 
       <p>
-        <button
-          className={styles.soloCta}
-          onClick={() => navigate("/solo")}
-        >
+        <button className={styles.soloCta} onClick={onSoloClick}>
           ▶ Play Solo
         </button>
       </p>
@@ -61,6 +73,11 @@ export function HomePage({ me, onLogout }: Props) {
               <li key={c.id}>
                 <Link to={`/c/${c.id}`} className={styles.clubLink}>
                   <strong>{c.name}</strong>
+                  {c.in_flight !== null && (
+                    <span className={styles.inFlightBadge}>
+                      {inFlightLabel(c.in_flight)}
+                    </span>
+                  )}
                   <span className={styles.clubMeta}>
                     {c.member_handles.join(", ")} · {c.game_count} game
                     {c.game_count === 1 ? "" : "s"}
@@ -71,6 +88,59 @@ export function HomePage({ me, onLogout }: Props) {
           </ul>
         )}
       </section>
+
+      {soloConfirm && (
+        <SoloConfirmDialog
+          inFlightClubs={inFlightClubs}
+          onCancel={() => setSoloConfirm(false)}
+          onContinue={() => {
+            setSoloConfirm(false);
+            navigate("/solo");
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function inFlightLabel(phase: NonNullable<ClubSummary["in_flight"]>): string {
+  switch (phase) {
+    case "playing":   return "game in progress";
+    case "proposing": return "proposal pending";
+    case "reviewing": return "reviewing";
+  }
+}
+
+type SoloConfirmProps = {
+  inFlightClubs: ClubSummary[];
+  onCancel: () => void;
+  onContinue: () => void;
+};
+
+/** "Play solo anyway?" gate when the user owes something to a club.
+ *  Names the club(s) so the user can recognize what they'd be leaving
+ *  behind. */
+function SoloConfirmDialog({ inFlightClubs, onCancel, onContinue }: SoloConfirmProps) {
+  const names = inFlightClubs.map((c) => `${c.name} (${inFlightLabel(c.in_flight!)})`);
+  return (
+    <div className={styles.confirmBackdrop} onClick={onCancel}>
+      <div className={styles.confirmDialog} onClick={(e) => e.stopPropagation()}>
+        <h3>Start a solo game?</h3>
+        <p>
+          You have something going on in{" "}
+          {names.length === 1 ? "your club " : "your clubs: "}
+          <strong>{names.join(", ")}</strong>. Solo play won't touch that,
+          but the club won't know you've stepped away.
+        </p>
+        <div className={styles.confirmActions}>
+          <button type="button" className="secondary" onClick={onCancel} autoFocus>
+            Cancel
+          </button>
+          <button type="button" onClick={onContinue}>
+            Play solo anyway
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

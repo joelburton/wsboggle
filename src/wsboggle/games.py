@@ -191,6 +191,23 @@ def find_unended_games(db: sqlite3.Connection) -> list[GameState]:
     return [_row_to_state(row) for row in rows]
 
 
+def find_active_club_ids(
+    db: sqlite3.Connection, club_ids: list[int]
+) -> set[int]:
+    """Which of these club_ids currently have an active (un-ended)
+    game. Used by ``/api/me`` to flag the in-flight ones on the home
+    page. Empty input returns an empty set without a DB hit."""
+    if not club_ids:
+        return set()
+    placeholders = ",".join("?" * len(club_ids))
+    rows = db.execute(
+        f"SELECT DISTINCT club_id FROM games "
+        f"WHERE ended_at IS NULL AND club_id IN ({placeholders})",
+        tuple(club_ids),
+    ).fetchall()
+    return {row["club_id"] for row in rows}
+
+
 def find_active_club_game(
     db: sqlite3.Connection, club_id: int
 ) -> GameState | None:
