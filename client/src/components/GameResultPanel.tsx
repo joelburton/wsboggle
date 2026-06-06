@@ -199,7 +199,8 @@ function WordChip({
       /* Stops the click from bubbling to the panel-level "close on
          outside click" handler — we want clicking another word to
          open *that* word's def, not close the current one before
-         opening. */
+         opening. The popover itself bubbles to its own onClick (which
+         calls the toggle) so clicking the popover dismisses it. */
     >
       <button
         type="button"
@@ -214,7 +215,11 @@ function WordChip({
         )}
       </button>
       {selected && (
-        <DefinitionPopover word={word} def={def} />
+        <DefinitionPopover
+          word={word}
+          def={def}
+          onClick={() => onClick(word)}
+        />
       )}
     </span>
   );
@@ -223,9 +228,11 @@ function WordChip({
 function DefinitionPopover({
   word,
   def,
+  onClick,
 }: {
   word: string;
   def: "loading" | string | null | undefined;
+  onClick: () => void;
 }) {
   let body: React.ReactNode;
   if (def === undefined || def === "loading") {
@@ -236,7 +243,7 @@ function DefinitionPopover({
     body = def;
   }
   return (
-    <div className={styles.popover} role="tooltip">
+    <div className={styles.popover} role="tooltip" onClick={onClick}>
       <div className={styles.popoverHead}>{word.toUpperCase()}</div>
       <div className={styles.popoverBody}>{body}</div>
     </div>

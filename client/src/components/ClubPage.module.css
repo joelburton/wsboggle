@@ -236,6 +236,47 @@
   width: 100%;
 }
 
+.segmented {
+  display: flex;
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #f3f4f6;
+  overflow: hidden;
+}
+
+.segmented button {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: #4b5563;
+  font: inherit;
+  padding: 0.45rem 0.75rem;
+  cursor: pointer;
+  position: relative;
+}
+
+/* Vertical divider between the two segments. Sits on the right
+   edge of the first button; the active segment hides it via the
+   border-color override below so the fill reads as one solid pill. */
+.segmented button:first-child {
+  border-right: 1px solid #cbd5e1;
+}
+
+.segmented button:hover:not(.segmentedOn) {
+  color: #1f2937;
+}
+
+.segmented button.segmentedOn {
+  background: #2563eb;
+  color: white;
+}
+
+.segmented button.segmentedOn + button,
+.segmented button.segmentedOn:first-child {
+  border-color: transparent;
+}
+
 .dialogActions {
   display: flex;
   justify-content: flex-end;

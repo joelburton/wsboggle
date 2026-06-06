@@ -840,12 +840,42 @@ function NewGameDialog({ initial, onCancel, onStart }: NewGameDialogProps) {
       <div className={styles.dialog} onClick={(e) => e.stopPropagation()}>
         <h3>New game</h3>
         <form onSubmit={submit}>
+          <div className={styles.dialogField}>
+            <span>Mode</span>
+            <div
+              className={styles.segmented}
+              role="radiogroup"
+              aria-label="Game mode"
+            >
+              <button
+                type="button"
+                role="radio"
+                aria-checked={gameMode === "competitive"}
+                className={
+                  gameMode === "competitive" ? styles.segmentedOn : ""
+                }
+                onClick={() => setGameMode("competitive")}
+              >
+                Compete
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={gameMode === "collaborative"}
+                className={
+                  gameMode === "collaborative" ? styles.segmentedOn : ""
+                }
+                onClick={() => setGameMode("collaborative")}
+              >
+                Co-Op
+              </button>
+            </div>
+          </div>
           <label className={styles.dialogField}>
             <span>Tileset</span>
             <select
               value={diceSet}
               onChange={(e) => setDiceSet(e.target.value)}
-              autoFocus
             >
               {DICE_SETS.map((d) => (
                 <option key={d.name} value={d.name}>{d.label}</option>
@@ -861,22 +891,6 @@ function NewGameDialog({ initial, onCancel, onStart }: NewGameDialogProps) {
               {TIMER_MODES.map((m) => (
                 <option key={m.id} value={m.id}>{m.label}</option>
               ))}
-            </select>
-          </label>
-          <label className={styles.dialogField}>
-            <span>Mode</span>
-            <select
-              value={gameMode}
-              onChange={(e) =>
-                setGameMode(e.target.value as "competitive" | "collaborative")
-              }
-            >
-              <option value="competitive">
-                Competitive — private lists, dupes cancel
-              </option>
-              <option value="collaborative">
-                Collaborative — shared list, dedup across players
-              </option>
             </select>
           </label>
           <label className={styles.dialogField}>

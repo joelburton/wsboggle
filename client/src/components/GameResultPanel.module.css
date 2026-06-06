@@ -78,13 +78,18 @@
   color: inherit;
 }
 
-.wordBtn:hover {
-  background: #f3f4f6;
+/* Bumped specificity (.wordWrap parent) so this wins over the
+   global ``button:hover`` blue-fill rule. A subtle blue outline
+   reads as "clickable" without recoloring the chip. */
+.wordWrap .wordBtn:hover {
+  background: transparent;
+  outline: 1px solid #bfdbfe;
+  outline-offset: 0;
 }
 
-.wordBtnSelected {
-  background: #fde68a !important;
-  color: #1f2937 !important;
+.wordWrap .wordBtn.wordBtnSelected {
+  background: #fde68a;
+  color: #1f2937;
 }
 
 .wordPoints {
