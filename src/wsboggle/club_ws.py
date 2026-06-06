@@ -51,11 +51,13 @@ from wsboggle.deps import SESSION_COOKIE_NAME
 from wsboggle.shared import (
     CCancelProposal,
     CChat,
+    CCloseNewGameDialog,
     CEndGame,
     CGameReady,
     CGuess,
     CHello,
     CNewGame,
+    COpenNewGameDialog,
     CReviewDone,
     ChatMessage,
     ClientMessage,
@@ -71,6 +73,7 @@ from wsboggle.shared import (
     SGuessRejected,
     SGuessSubmitted,
     SMemberPresence,
+    SNewGameDialogUpdate,
     SProposalUpdate,
     SReviewUpdate,
     ServerMessage,
@@ -117,6 +120,14 @@ _pending_proposals: dict[int, PendingProposal] = {}
 # restart wipes it; whoever reconnects sees no review pending and the
 # club is free to start a new game.
 _pending_reviews: dict[int, PendingReview] = {}
+
+# Per-club new-game-dialog claim. While set, one user is filling out
+# the config dialog and all other members see a non-dismissable
+# "X is choosing options" overlay. Released by an explicit
+# ``closeNewGameDialog``, by a successful ``newGame`` from the
+# claimant, or by the claimant disconnecting. Same in-memory
+# lifetime as the other ephemeral phases.
+_new_game_dialog_openers: dict[int, int] = {}
 
 
 def _ts_validate_client_message(raw: Any) -> ClientMessage:
@@ -316,6 +327,7 @@ async def club_socket(ws: WebSocket, club_id: int) -> None:
                 last_config=games.find_last_club_config(db, club_id),
                 pending_proposal=_pending_proposals.get(club_id),
                 pending_review=_pending_reviews.get(club_id),
+                new_game_dialog_opener_id=_new_game_dialog_openers.get(club_id),
             ),
         )
         if first_socket:
@@ -331,6 +343,21 @@ async def club_socket(ws: WebSocket, club_id: int) -> None:
     finally:
         last_socket = await _unregister(club_id, user.id, ws)
         if last_socket:
+            # Release any dialog claim the user was holding — leaving
+            # mid-choose would otherwise wedge the club. The release
+            # is conditional on "still the holder" so a second tab
+            # claim that arrived after this socket opened isn't
+            # stolen away by this cleanup.
+            async with _game_lock:
+                opener_cleared = (
+                    _new_game_dialog_openers.get(club_id) == user.id
+                )
+                if opener_cleared:
+                    del _new_game_dialog_openers[club_id]
+            if opener_cleared:
+                await _broadcast(
+                    club_id, SNewGameDialogUpdate(opener_id=None)
+                )
             await _broadcast(
                 club_id,
                 SMemberPresence(user_id=user.id, online=False),
@@ -379,6 +406,12 @@ async def _recv_loop(
             continue
         if isinstance(msg, CCancelProposal):
             await _handle_cancel_proposal(ws, club_id=club_id)
+            continue
+        if isinstance(msg, COpenNewGameDialog):
+            await _handle_open_new_game_dialog(ws, club_id=club_id, user=user)
+            continue
+        if isinstance(msg, CCloseNewGameDialog):
+            await _handle_close_new_game_dialog(club_id=club_id, user=user)
             continue
         if isinstance(msg, CReviewDone):
             await _handle_review_done(ws, db, club_id=club_id, user=user)
@@ -497,6 +530,22 @@ async def _handle_new_game(
             )
             return
 
+        # Dialog-claim gate. The claimant submits their config via
+        # newGame; if a different user holds the claim they should
+        # have been blocked on the client (their dialog was never
+        # openable), so this is a defensive feedback for a
+        # client-bug or race rather than a routine path.
+        opener = _new_game_dialog_openers.get(club_id)
+        if opener is not None and opener != user.id:
+            await _send(
+                ws,
+                SFeedback(
+                    text="Someone else is choosing options.",
+                    level="warn",
+                ),
+            )
+            return
+
         # All-online check. Read the registry under its own lock so
         # we see a consistent snapshot.
         async with _lock:
@@ -525,8 +574,14 @@ async def _handle_new_game(
             ready_user_ids=[user.id],
         )
         _pending_proposals[club_id] = proposal
+        # The claimant submitted; release the dialog claim. (Play
+        # Again submits without ever claiming, so this pop is also
+        # a no-op for that path.)
+        opener_cleared = _new_game_dialog_openers.pop(club_id, None) is not None
 
     await _broadcast(club_id, SProposalUpdate(proposal=proposal))
+    if opener_cleared:
+        await _broadcast(club_id, SNewGameDialogUpdate(opener_id=None))
 
 
 async def _handle_game_ready(
@@ -611,6 +666,58 @@ async def _handle_cancel_proposal(
             return
 
     await _broadcast(club_id, SProposalUpdate(proposal=None))
+
+
+async def _handle_open_new_game_dialog(
+    ws: WebSocket,
+    *,
+    club_id: int,
+    user: auth.User,
+) -> None:
+    """Claim the new-game-dialog lock for this user.
+
+    The client opens its config dialog locally on click and fires
+    this in parallel. If the claim succeeds we broadcast so peers
+    can render their locked overlay; if someone else already holds
+    it the client should close its (optimistically-opened) dialog
+    on the resulting feedback toast.
+
+    Idempotent for the existing holder — re-claim by the same user
+    is a silent no-op, no broadcast.
+    """
+    async with _game_lock:
+        current = _new_game_dialog_openers.get(club_id)
+        if current == user.id:
+            return
+        if current is not None:
+            await _send(
+                ws,
+                SFeedback(
+                    text="Someone else is choosing options.",
+                    level="warn",
+                ),
+            )
+            return
+        _new_game_dialog_openers[club_id] = user.id
+
+    await _broadcast(club_id, SNewGameDialogUpdate(opener_id=user.id))
+
+
+async def _handle_close_new_game_dialog(
+    *,
+    club_id: int,
+    user: auth.User,
+) -> None:
+    """Release the dialog claim — Cancel / Esc / backdrop on the
+    config dialog. Only the current holder can release; messages
+    from anyone else are silently dropped (a stale tab sending
+    this shouldn't kick the legitimate chooser)."""
+    async with _game_lock:
+        if _new_game_dialog_openers.get(club_id) != user.id:
+            return
+        del _new_game_dialog_openers[club_id]
+
+    await _broadcast(club_id, SNewGameDialogUpdate(opener_id=None))
 
 
 async def _broadcast_game_started(

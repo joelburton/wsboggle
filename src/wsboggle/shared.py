@@ -494,10 +494,28 @@ class CReviewDone(BaseModel):
     type: Literal["reviewDone"] = "reviewDone"
 
 
+class COpenNewGameDialog(BaseModel):
+    """Claim the new-game config dialog. While the sender holds the
+    claim, no other member can open their own dialog or click Play
+    again — they see a non-dismissable "X is choosing options"
+    overlay instead. Released by ``closeNewGameDialog``, by a
+    successful ``newGame`` from the claimant, or by disconnect."""
+
+    type: Literal["openNewGameDialog"] = "openNewGameDialog"
+
+
+class CCloseNewGameDialog(BaseModel):
+    """Release the new-game dialog claim without proposing a game
+    (the user clicked Cancel / closed the dialog / hit Esc)."""
+
+    type: Literal["closeNewGameDialog"] = "closeNewGameDialog"
+
+
 ClientMessage = Annotated[
     Union[
         CHello, CChat, CNewGame, CGuess, CEndGame,
         CGameReady, CCancelProposal, CReviewDone,
+        COpenNewGameDialog, CCloseNewGameDialog,
     ],
     Field(discriminator="type"),
 ]
@@ -537,6 +555,11 @@ class SClubState(BaseModel):
     # Ephemeral confirmation states. Cleared by a server restart.
     pending_proposal: "PendingProposal | None" = None
     pending_review: "PendingReview | None" = None
+    new_game_dialog_opener_id: int | None = None
+    """User id of the member currently holding the new-game-dialog
+    claim, or ``None`` when no one is choosing. While set, other
+    members render a non-dismissable overlay and can't open their
+    own dialog or click Play again."""
 
 
 class PendingProposal(BaseModel):
@@ -686,6 +709,15 @@ class SReviewUpdate(BaseModel):
     review: "PendingReview | None"
 
 
+class SNewGameDialogUpdate(BaseModel):
+    """Who currently holds the new-game-dialog claim, or ``None``.
+    Broadcast on claim / release / claim-holder disconnect /
+    successful proposal-from-claimant."""
+
+    type: Literal["newGameDialogUpdate"] = "newGameDialogUpdate"
+    opener_id: int | None
+
+
 ServerMessage = Annotated[
     Union[
         SClubState,
@@ -699,6 +731,7 @@ ServerMessage = Annotated[
         SGameEnded,
         SProposalUpdate,
         SReviewUpdate,
+        SNewGameDialogUpdate,
     ],
     Field(discriminator="type"),
 ]

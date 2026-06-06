@@ -87,6 +87,11 @@ export type ClubSocketState = {
   /** The most-recently-ended game is being reviewed. New-game button
    *  is gated until this transitions back to null. */
   pendingReview: PendingReview | null;
+  /** Who currently holds the new-game-dialog claim, or null. When
+   *  this equals the viewer, the viewer renders the config dialog;
+   *  when it's any other user, the viewer renders a non-dismissable
+   *  "X is choosing options" overlay. */
+  newGameDialogOpenerId: number | null;
 
   /** Transient toasts queued by server `feedback`; consumer is
    *  expected to render + clear. */
@@ -113,6 +118,7 @@ const initialState: ClubSocketState = {
   lastConfig: null,
   pendingProposal: null,
   pendingReview: null,
+  newGameDialogOpenerId: null,
   feedback: [],
 };
 
@@ -147,6 +153,7 @@ function reducer(state: ClubSocketState, action: Action): ClubSocketState {
             lastConfig: msg.last_config,
             pendingProposal: msg.pending_proposal,
             pendingReview: msg.pending_review,
+            newGameDialogOpenerId: msg.new_game_dialog_opener_id,
           };
         case "chatMessage":
           return { ...state, chat: [...state.chat, msg.message] };
@@ -183,6 +190,8 @@ function reducer(state: ClubSocketState, action: Action): ClubSocketState {
           return { ...state, pendingProposal: msg.proposal };
         case "reviewUpdate":
           return { ...state, pendingReview: msg.review };
+        case "newGameDialogUpdate":
+          return { ...state, newGameDialogOpenerId: msg.opener_id };
         case "guessAccepted": {
           // In competitive mode this is the only "your guess was
           // recorded" channel — append legal + illegal-but-shown
@@ -260,6 +269,10 @@ export type ClubSocketHandle = {
    *  game. When everyone has done so the server clears the
    *  pending review and new games can be proposed again. */
   sendReviewDone: () => void;
+  /** Claim the new-game-dialog lock for the viewer. */
+  sendOpenNewGameDialog: () => void;
+  /** Release the new-game-dialog lock (Cancel / Esc / backdrop). */
+  sendCloseNewGameDialog: () => void;
   /** Submit a guess; resolves with the server's verdict translated
    *  into the same `GuessResponse` shape the solo HTTP path uses,
    *  so the `WordEntry` component plugs in unchanged. */
@@ -408,6 +421,18 @@ export function useClubSocket(clubId: number, myUserId: number): ClubSocketHandl
     send(ws, { type: "reviewDone" });
   }
 
+  function sendOpenNewGameDialog() {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    send(ws, { type: "openNewGameDialog" });
+  }
+
+  function sendCloseNewGameDialog() {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    send(ws, { type: "closeNewGameDialog" });
+  }
+
   function sendGuess(word: string): Promise<GuessResponse> {
     const normalized = word.trim().toLowerCase();
     const ws = wsRef.current;
@@ -442,6 +467,8 @@ export function useClubSocket(clubId: number, myUserId: number): ClubSocketHandl
     sendGameReady,
     sendCancelProposal,
     sendReviewDone,
+    sendOpenNewGameDialog,
+    sendCloseNewGameDialog,
     sendGuess,
     sendEndGame,
     clearResult,

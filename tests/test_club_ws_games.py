@@ -194,6 +194,138 @@ def test_new_game_refused_when_one_already_active(
     assert rows["n"] == 1
 
 
+# --- New-game-dialog claim ------------------------------------------------
+
+
+def test_open_new_game_dialog_broadcasts_opener(
+    client: TestClient, db: sqlite3.Connection
+) -> None:
+    """``openNewGameDialog`` broadcasts ``newGameDialogUpdate`` with
+    the opener's user_id to every member."""
+    joel_token, moth_token, club_id = _setup_club(client, db)
+
+    with _ws_connect(client, joel_token, f"/ws/clubs/{club_id}") as joel_ws:
+        joel_ws.receive_json()
+        with _ws_connect(client, moth_token, f"/ws/clubs/{club_id}") as moth_ws:
+            moth_ws.receive_json()
+            joel_ws.receive_json()
+
+            joel_ws.send_json({"type": "openNewGameDialog"})
+            joel_id = db.execute(
+                "SELECT id FROM users WHERE handle_lower = 'joel'"
+            ).fetchone()["id"]
+
+            for ws in (joel_ws, moth_ws):
+                msg = _drain_until(ws, "newGameDialogUpdate")
+                assert msg["opener_id"] == joel_id
+
+
+def test_open_new_game_dialog_refused_when_held(
+    client: TestClient, db: sqlite3.Connection
+) -> None:
+    """A second claim from a different user gets a feedback toast,
+    no broadcast, opener_id unchanged."""
+    joel_token, moth_token, club_id = _setup_club(client, db)
+
+    with _ws_connect(client, joel_token, f"/ws/clubs/{club_id}") as joel_ws:
+        joel_ws.receive_json()
+        with _ws_connect(client, moth_token, f"/ws/clubs/{club_id}") as moth_ws:
+            moth_ws.receive_json()
+            joel_ws.receive_json()
+
+            joel_ws.send_json({"type": "openNewGameDialog"})
+            _drain_until(joel_ws, "newGameDialogUpdate")
+            _drain_until(moth_ws, "newGameDialogUpdate")
+
+            moth_ws.send_json({"type": "openNewGameDialog"})
+            msg = _drain_until(moth_ws, "feedback")
+            assert "someone else" in msg["text"].lower()
+
+
+def test_close_new_game_dialog_releases_claim(
+    client: TestClient, db: sqlite3.Connection
+) -> None:
+    """``closeNewGameDialog`` from the holder broadcasts a null
+    opener; a second claim then succeeds."""
+    joel_token, moth_token, club_id = _setup_club(client, db)
+
+    with _ws_connect(client, joel_token, f"/ws/clubs/{club_id}") as joel_ws:
+        joel_ws.receive_json()
+        with _ws_connect(client, moth_token, f"/ws/clubs/{club_id}") as moth_ws:
+            moth_ws.receive_json()
+            joel_ws.receive_json()
+
+            joel_ws.send_json({"type": "openNewGameDialog"})
+            _drain_until(joel_ws, "newGameDialogUpdate")
+            _drain_until(moth_ws, "newGameDialogUpdate")
+
+            joel_ws.send_json({"type": "closeNewGameDialog"})
+            for ws in (joel_ws, moth_ws):
+                cleared = _drain_until(ws, "newGameDialogUpdate")
+                assert cleared["opener_id"] is None
+
+            # moth can now claim.
+            moth_ws.send_json({"type": "openNewGameDialog"})
+            _drain_until(moth_ws, "newGameDialogUpdate")
+
+
+def test_disconnect_holder_releases_claim(
+    client: TestClient, db: sqlite3.Connection
+) -> None:
+    """If the dialog holder disconnects, the claim is released and
+    peers receive ``newGameDialogUpdate`` with a null opener."""
+    joel_token, moth_token, club_id = _setup_club(client, db)
+
+    # moth is the surviving observer; joel claims then drops out.
+    with _ws_connect(client, moth_token, f"/ws/clubs/{club_id}") as moth_ws:
+        moth_ws.receive_json()
+        with _ws_connect(client, joel_token, f"/ws/clubs/{club_id}") as joel_ws:
+            joel_ws.receive_json()
+            moth_ws.receive_json()  # joel online
+
+            joel_ws.send_json({"type": "openNewGameDialog"})
+            _drain_until(joel_ws, "newGameDialogUpdate")
+            _drain_until(moth_ws, "newGameDialogUpdate")
+
+        # joel_ws is closed by the `with` exit; moth_ws is still
+        # open and observes the cleanup.
+        cleared = _drain_until(moth_ws, "newGameDialogUpdate")
+        assert cleared["opener_id"] is None
+
+
+def test_new_game_releases_claim(
+    client: TestClient, db: sqlite3.Connection
+) -> None:
+    """A successful ``newGame`` from the dialog holder clears the
+    claim and the proposal opens — both events broadcast."""
+    joel_token, moth_token, club_id = _setup_club(client, db)
+
+    with _ws_connect(client, joel_token, f"/ws/clubs/{club_id}") as joel_ws:
+        joel_ws.receive_json()
+        with _ws_connect(client, moth_token, f"/ws/clubs/{club_id}") as moth_ws:
+            moth_ws.receive_json()
+            joel_ws.receive_json()
+
+            joel_ws.send_json({"type": "openNewGameDialog"})
+            _drain_until(joel_ws, "newGameDialogUpdate")
+            _drain_until(moth_ws, "newGameDialogUpdate")
+
+            joel_ws.send_json({"type": "newGame", "config": _new_game_config()})
+
+            # Proposal opens + dialog claim clears, in either order.
+            for ws in (joel_ws, moth_ws):
+                seen = set()
+                for _ in range(10):
+                    msg = ws.receive_json()
+                    if msg["type"] == "proposalUpdate" and msg["proposal"] is not None:
+                        seen.add("proposal")
+                    elif msg["type"] == "newGameDialogUpdate" and msg["opener_id"] is None:
+                        seen.add("released")
+                    if seen == {"proposal", "released"}:
+                        break
+                assert seen == {"proposal", "released"}
+
+
 # --- Proposal flow --------------------------------------------------------
 
 

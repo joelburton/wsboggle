@@ -239,6 +239,11 @@ export type CGameReady = { type: "gameReady" };
 export type CCancelProposal = { type: "cancelProposal" };
 /** Mark the sender as done reviewing the most-recently-ended game. */
 export type CReviewDone = { type: "reviewDone" };
+/** Claim the new-game config dialog so no other member can open
+ *  their own dialog or click Play again until released. */
+export type COpenNewGameDialog = { type: "openNewGameDialog" };
+/** Release the dialog claim (Cancel / Esc / backdrop). */
+export type CCloseNewGameDialog = { type: "closeNewGameDialog" };
 export type ClientMessage =
   | CHello
   | CChat
@@ -247,7 +252,9 @@ export type ClientMessage =
   | CEndGame
   | CGameReady
   | CCancelProposal
-  | CReviewDone;
+  | CReviewDone
+  | COpenNewGameDialog
+  | CCloseNewGameDialog;
 
 // Server → client
 
@@ -270,6 +277,10 @@ export type SClubState = {
   /** Set when the most-recently-ended game is being reviewed and
    *  no new game can start until every member has clicked Done. */
   pending_review: PendingReview | null;
+  /** User id of the member currently holding the new-game-dialog
+   *  claim, or null. While set, other members see a non-dismissable
+   *  "X is choosing options" overlay. */
+  new_game_dialog_opener_id: number | null;
 };
 
 /** A proposed game waiting for member readiness. Carried on the
@@ -358,6 +369,12 @@ export type SReviewUpdate = {
   review: PendingReview | null;
 };
 
+/** Who currently holds the new-game-dialog claim, or null. */
+export type SNewGameDialogUpdate = {
+  type: "newGameDialogUpdate";
+  opener_id: number | null;
+};
+
 export type ServerMessage =
   | SClubState
   | SChatMessage
@@ -369,4 +386,5 @@ export type ServerMessage =
   | SGuessRejected
   | SGameEnded
   | SProposalUpdate
-  | SReviewUpdate;
+  | SReviewUpdate
+  | SNewGameDialogUpdate;

@@ -201,6 +201,10 @@ We accept hand-mirror sync risk as the cost of two languages.
 - `cancelProposal` — drop the pending proposal. Any connected member.
 - `reviewDone` — ack the most-recently-ended game's results panel.
   The next `newGame` is gated until every member has sent this.
+- `openNewGameDialog` — claim the new-game config dialog. While the
+  sender holds the claim, no other member can open their own dialog
+  or click Play again.
+- `closeNewGameDialog` — release the claim (Cancel / Esc / backdrop).
 - `endGame` — explicit end (only meaningful when the game has no timer).
   Any member can send.
 
@@ -229,6 +233,9 @@ We accept hand-mirror sync risk as the cost of two languages.
   followed by a `reviewUpdate` opening the review phase.
 - `reviewUpdate` — `{review: {done_user_ids} | null}`. Open / update /
   clear of the pending-review state.
+- `newGameDialogUpdate` — `{opener_id: int | null}`. Who currently
+  holds the new-game-dialog claim. Released on `closeNewGameDialog`,
+  successful `newGame` from the claimant, or claimant disconnect.
 - `feedback` — `{id, text, level}` for short toasts.
 
 ### Confirmation gates

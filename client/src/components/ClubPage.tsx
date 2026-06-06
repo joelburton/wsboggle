@@ -71,6 +71,8 @@ export function ClubPage({ clubId, me }: Props) {
     sendGameReady,
     sendCancelProposal,
     sendReviewDone,
+    sendOpenNewGameDialog,
+    sendCloseNewGameDialog,
     sendGuess,
     sendEndGame,
     clearResult,
@@ -271,8 +273,11 @@ export function ClubPage({ clubId, me }: Props) {
               lastConfig={state.lastConfig}
               proposalPending={state.pendingProposal !== null}
               reviewPending={state.pendingReview}
+              dialogOpenerId={state.newGameDialogOpenerId}
               onStart={sendNewGame}
               onReviewDone={sendReviewDone}
+              onOpenDialog={sendOpenNewGameDialog}
+              onCloseDialog={sendCloseNewGameDialog}
             />
           )}
         </div>
@@ -325,6 +330,16 @@ export function ClubPage({ clubId, me }: Props) {
         />
       )}
 
+      {state.newGameDialogOpenerId !== null &&
+        state.newGameDialogOpenerId !== me.user.id && (
+          <NewGameDialogLockedPrompt
+            openerHandle={
+              state.members.find((m) => m.user_id === state.newGameDialogOpenerId)
+                ?.handle ?? `user ${state.newGameDialogOpenerId}`
+            }
+          />
+        )}
+
       {leaveConfirm && (
         <LeaveClubConfirm
           mode={mode}
@@ -336,6 +351,25 @@ export function ClubPage({ clubId, me }: Props) {
           }}
         />
       )}
+    </div>
+  );
+}
+
+// --- New-game-dialog locked prompt --------------------------------------
+
+/** Non-dismissable overlay shown to every member *except* the
+ *  current chooser. No buttons — the only way out is for the chooser
+ *  to submit (proposal opens, dialog releases) or close (dialog
+ *  releases) or disconnect (server cleanup releases). */
+function NewGameDialogLockedPrompt({ openerHandle }: { openerHandle: string }) {
+  return (
+    <div className={styles.dialogBackdrop}>
+      <div className={styles.dialog}>
+        <h3>{openerHandle} is choosing options for a new game</h3>
+        <p style={{ margin: 0, color: "#374151" }}>
+          You'll get a Ready prompt as soon as they pick.
+        </p>
+      </div>
     </div>
   );
 }
@@ -462,20 +496,35 @@ type ClubMainProps = {
   /** Non-null while the most-recently-ended game is being reviewed.
    *  Gates the start buttons until every member has acked. */
   reviewPending: PendingReview | null;
+  /** User id of whoever currently holds the new-game-dialog claim,
+   *  or null. When this is the viewer's id, this view renders the
+   *  config dialog; when it's someone else's, the buttons are
+   *  disabled and the wrapper renders a locked overlay. */
+  dialogOpenerId: number | null;
   onStart: (config: GameConfig) => void;
   /** Fire `reviewDone` for the viewer. Shown in the main view when
    *  the viewer hasn't acked yet — covers the reload-mid-review
    *  case where the result panel is gone but the gate is still up. */
   onReviewDone: () => void;
+  onOpenDialog: () => void;
+  onCloseDialog: () => void;
 };
 
 function ClubMainView(props: ClubMainProps) {
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const myUserId = props.me.user.id;
+  const dialogOpen = props.dialogOpenerId === myUserId;
+  const someoneElseChoosing =
+    props.dialogOpenerId !== null && props.dialogOpenerId !== myUserId;
+  const otherChooserHandle =
+    someoneElseChoosing
+      ? props.members.find((m) => m.user_id === props.dialogOpenerId)?.handle ??
+        `user ${props.dialogOpenerId}`
+      : null;
   const reviewPending = props.reviewPending;
   const viewerAckedReview =
     reviewPending === null
       ? true
-      : reviewPending.done_user_ids.includes(props.me.user.id);
+      : reviewPending.done_user_ids.includes(myUserId);
   const reviewWaitingOn =
     reviewPending !== null
       ? props.members
@@ -486,13 +535,16 @@ function ClubMainView(props: ClubMainProps) {
     !props.allOnline ||
     !props.connected ||
     props.proposalPending ||
-    reviewPending !== null;
+    reviewPending !== null ||
+    someoneElseChoosing;
   const disabledReason = !props.connected
     ? "Reconnect to start a game."
     : !props.allOnline
     ? "Waiting for everyone to be in the club."
     : props.proposalPending
     ? "A game is being proposed."
+    : someoneElseChoosing
+    ? `${otherChooserHandle} is choosing options.`
     : !viewerAckedReview
     ? "You haven't finished reviewing the last game yet."
     : reviewWaitingOn.length > 0
@@ -540,7 +592,7 @@ function ClubMainView(props: ClubMainProps) {
           <button
             className={props.lastConfig !== null ? "secondary" : ""}
             disabled={disabled}
-            onClick={() => setDialogOpen(true)}
+            onClick={props.onOpenDialog}
           >
             {props.lastConfig !== null ? "New game…" : "▶ New game…"}
           </button>
@@ -556,9 +608,12 @@ function ClubMainView(props: ClubMainProps) {
         {dialogOpen && (
           <NewGameDialog
             initial={props.lastConfig}
-            onCancel={() => setDialogOpen(false)}
+            onCancel={props.onCloseDialog}
             onStart={(cfg) => {
-              setDialogOpen(false);
+              // Don't fire onCloseDialog — the server clears the
+              // claim as part of accepting the newGame, and an
+              // explicit close here would race the proposal
+              // broadcast.
               props.onStart(cfg);
             }}
           />
