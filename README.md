@@ -26,12 +26,12 @@ pip install -e ".[dev]"
 # Install client deps.
 ( cd client && npm install )
 
-# Run server and client in two terminals.
-python -m wsboggle              # Uvicorn on :3001
-( cd client && npm run dev )    # Vite on :5173, proxies /api + /ws → :3001
+# Run backend + Vite together (Ctrl-C stops both).
+make dev
 ```
 
-Open `http://localhost:5173`.
+Open `http://localhost:5173`. (Vite serves the client and proxies
+`/api` + `/ws` to uvicorn on :3001.)
 
 ## Environment variables
 
