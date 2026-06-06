@@ -52,6 +52,12 @@ const SCORING_LADDERS: readonly { name: string; label: string }[] = [
   { name: "big",   label: "Prefer big: 1–50" },
 ];
 
+/** Shortest accepted word. 3 is Boggle-classic; higher values are for
+ *  players who find 3- and 4-letter words tedious. Affects both guess
+ *  validation and the solver's "total on board" / "missed" counts —
+ *  short words simply don't exist as far as the game is concerned. */
+const MIN_WORD_LENGTHS: readonly number[] = [3, 4, 5, 6];
+
 /** Build a complete GameConfig from the knobs we expose, filling
  *  in the same defaults the server would. Sending an explicit full
  *  shape (rather than a partial) keeps the wire payload obvious from
@@ -60,12 +66,13 @@ function buildConfig(
   diceSet: string,
   mode: TimerMode,
   scoringLadder: string,
+  minLegalLength: number,
   constraints: Constraints,
 ): GameConfig {
   return {
     dice_set: diceSet,
     scoring_ladder: scoringLadder,
-    min_legal_length: 3,
+    min_legal_length: minLegalLength,
     mode: "competitive",
     dupes_cancel: true,
     timer_seconds: mode.seconds,
@@ -83,6 +90,7 @@ export function NewSoloGamePage() {
   const [diceSet, setDiceSet] = useState("4");
   const [modeId, setModeId] = useState("180");
   const [scoringLadder, setScoringLadder] = useState("basic");
+  const [minLegalLength, setMinLegalLength] = useState(3);
   const [constraints, setConstraints] = useState<Constraints>(EMPTY_CONSTRAINTS);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -94,7 +102,7 @@ export function NewSoloGamePage() {
     try {
       const mode = TIMER_MODES.find((m) => m.id === modeId) ?? TIMER_MODES[3];
       const snap = await api.startSolo(
-        buildConfig(diceSet, mode, scoringLadder, constraints),
+        buildConfig(diceSet, mode, scoringLadder, minLegalLength, constraints),
       );
       navigate(`/solo/${snap.game_id}`);
     } catch (err) {
@@ -139,6 +147,18 @@ export function NewSoloGamePage() {
           >
             {SCORING_LADDERS.map((l) => (
               <option key={l.name} value={l.name}>{l.label}</option>
+            ))}
+          </select>
+        </label>
+
+        <label className={styles.field}>
+          <span>Min word length</span>
+          <select
+            value={minLegalLength}
+            onChange={(e) => setMinLegalLength(Number(e.target.value))}
+          >
+            {MIN_WORD_LENGTHS.map((n) => (
+              <option key={n} value={n}>{n} letters</option>
             ))}
           </select>
         </label>

@@ -429,6 +429,12 @@ const TIMER_MODES: readonly TimerMode[] = [
   { id: "untimed", label: "Untimed",     seconds: null, direction: "down" },
 ];
 
+/** Shortest accepted word. 3 is Boggle-classic; higher values are for
+ *  players who find 3- and 4-letter words tedious. Affects both guess
+ *  validation and the solver's "total on board" / "missed" counts —
+ *  short words simply don't exist as far as the game is concerned. */
+const MIN_WORD_LENGTHS: readonly number[] = [3, 4, 5, 6];
+
 /** Named scoring ladders mirroring ``wsboggle.scoring.LADDERS``.
  *  Server is the source of truth; the client only needs the names
  *  + display labels. */
@@ -458,6 +464,7 @@ function buildConfig(
   diceSet: string,
   mode: TimerMode,
   scoringLadder: string,
+  minLegalLength: number,
   gameMode: "competitive" | "collaborative",
   constraints: Constraints,
   base: GameConfig | null,
@@ -465,7 +472,7 @@ function buildConfig(
   return {
     dice_set: diceSet,
     scoring_ladder: scoringLadder,
-    min_legal_length: base?.min_legal_length ?? 3,
+    min_legal_length: minLegalLength,
     mode: gameMode,
     // Dupes-cancel only matters in competitive; collaborative
     // dedups across players before counting, so the flag is moot
@@ -531,6 +538,9 @@ function NewGameDialog({ initial, onCancel, onStart }: NewGameDialogProps) {
   const [scoringLadder, setScoringLadder] = useState(
     initial?.scoring_ladder ?? "basic",
   );
+  const [minLegalLength, setMinLegalLength] = useState(
+    initial?.min_legal_length ?? 3,
+  );
   const [gameMode, setGameMode] = useState<"competitive" | "collaborative">(
     initial?.mode ?? "competitive",
   );
@@ -553,7 +563,15 @@ function NewGameDialog({ initial, onCancel, onStart }: NewGameDialogProps) {
     e.preventDefault();
     const mode = TIMER_MODES.find((m) => m.id === modeId) ?? TIMER_MODES[3];
     onStart(
-      buildConfig(diceSet, mode, scoringLadder, gameMode, constraints, initial),
+      buildConfig(
+        diceSet,
+        mode,
+        scoringLadder,
+        minLegalLength,
+        gameMode,
+        constraints,
+        initial,
+      ),
     );
   }
 
@@ -609,6 +627,17 @@ function NewGameDialog({ initial, onCancel, onStart }: NewGameDialogProps) {
             >
               {SCORING_LADDERS.map((l) => (
                 <option key={l.name} value={l.name}>{l.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className={styles.dialogField}>
+            <span>Min word length</span>
+            <select
+              value={minLegalLength}
+              onChange={(e) => setMinLegalLength(Number(e.target.value))}
+            >
+              {MIN_WORD_LENGTHS.map((n) => (
+                <option key={n} value={n}>{n} letters</option>
               ))}
             </select>
           </label>
