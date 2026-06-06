@@ -1,0 +1,18 @@
+[Unit]
+Description=wsboggle (collaborative web Boggle)
+After=network.target
+
+[Service]
+Type=simple
+User=admin
+Group=admin
+WorkingDirectory=/home/admin/wsboggle
+Environment=HOST=127.0.0.1
+Environment=PORT=3004
+Environment=CLIENT_DIST=client/dist
+ExecStart=/home/admin/wsboggle/.venv/bin/python -m wsboggle
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
