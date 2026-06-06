@@ -13,10 +13,12 @@ Companion projects:
 - `../crossplay` — collaborative crossword. Source of architectural patterns
   (server-authoritative WS, cookie sessions, scrypt passwords, single-port
   prod deploy, hand-rolled routing). Mostly transferable in shape, not in code.
-- `../tboggle` — terminal Boggle. Source of game logic, dice sets, scoring
-  ladders, the C `libwords` solver, and the SQLite definitions DB. Port the
-  Python modules nearly as-is; reuse `libwords.so` and `all.sqlite3`
-  unchanged.
+- `../tboggle` — terminal Boggle. Historical source of game logic, dice
+  sets, scoring ladders, the C `libwords` solver, and the SQLite
+  definitions DB. The vendored copies live in this repo now
+  (`c/libwords.c`, `data/words.dat`, `data/all.sqlite3`); no runtime
+  dependency on a sibling tboggle checkout. Cross-reference tboggle
+  only for design history.
 
 ## Goals
 

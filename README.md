@@ -14,11 +14,8 @@ to run; pieces are still being built. Track progress in `CLAUDE.md`.
 Requires Python 3.12+, a C compiler (`cc`), and Node 22+.
 
 ```sh
-# One-time bootstrap (copies words.dat / all.sqlite3 / libwords.c
-# from a sibling ../tboggle checkout).
-make bootstrap
-
-# Build the libwords shared library.
+# Build the libwords shared library. (Game-data files — words.dat,
+# all.sqlite3, libwords.c — are vendored in the repo.)
 make lib
 
 # Install Python deps in a venv.
