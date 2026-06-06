@@ -113,33 +113,52 @@ CREATE INDEX chat_messages_club_id ON chat_messages(club_id, id);
 """
 
 
-def connect() -> sqlite3.Connection:
-    """Open a connection to the configured DB, creating it if needed.
+def _open(path: Path) -> sqlite3.Connection:
+    """Open one configured sqlite3 connection — autocommit, WAL,
+    foreign-keys, row factory. Used by both the lifespan (long-lived
+    WS-side connection) and per-request HTTP handlers.
 
-    The schema is applied when the DB is *empty* — detected by looking
-    for any user-defined table, not by checking the file's existence.
-    That way an empty DB file (e.g. one ``tempfile`` pre-created in
-    tests) gets bootstrapped correctly.
+    ``check_same_thread=False`` is required because FastAPI sync
+    handlers run on a threadpool worker; a connection opened on the
+    event-loop thread would refuse use otherwise. Despite the flag,
+    sqlite3 cursor state is **not** safe under concurrent use from
+    multiple threads — see :func:`get_request_connection` for the
+    per-request pattern that avoids this.
     """
-    path = Path(settings.db_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    # check_same_thread=False is safe with isolation_level=None
-    # (autocommit) — every execute is its own transaction, and sqlite
-    # serializes concurrent writes at the engine level. Needed because
-    # FastAPI's TestClient and any sync route handlers run on a
-    # threadpool worker, not the event-loop thread that opened the
-    # connection.
-    #
-    # Trade-off: autocommit means **multi-statement operations are not
-    # atomic by default**. Code that needs grouped INSERTs / UPDATEs
-    # (e.g. ``clubs.create_club``) must wrap its work in
-    # ``with conn:`` so sqlite issues an explicit BEGIN/COMMIT.
     conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.row_factory = sqlite3.Row
+    return conn
 
+
+def connect() -> sqlite3.Connection:
+    """Open the process-wide connection used by the WS layer + the
+    startup recovery sweep.
+
+    The WS side runs entirely on the event loop, so concurrent
+    access through this single connection is impossible: every
+    ``db.execute`` either runs to completion or yields, never
+    interleaves with another thread's cursor. HTTP handlers must
+    NOT use this connection — they're on a threadpool and a second
+    request's call into the same cursor mid-step would corrupt
+    sqlite3's internal state (SQLITE_MISUSE). Use
+    :func:`get_request_connection` from the HTTP path instead.
+
+    The schema is applied when the DB is *empty* — detected by
+    looking for any user-defined table, not by checking the file's
+    existence. That way an empty DB file (e.g. one ``tempfile``
+    pre-created in tests) gets bootstrapped correctly.
+
+    Trade-off of autocommit: **multi-statement operations are not
+    atomic by default**. Code that needs grouped INSERTs / UPDATEs
+    (e.g. ``clubs.create_club``) must wrap its work in ``with conn:``
+    so sqlite issues an explicit BEGIN/COMMIT.
+    """
+    path = Path(settings.db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    conn = _open(path)
     has_schema = (
         conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'"
@@ -150,3 +169,18 @@ def connect() -> sqlite3.Connection:
         conn.executescript(SCHEMA)
 
     return conn
+
+
+def get_request_connection() -> sqlite3.Connection:
+    """Open a fresh connection for one HTTP request — caller closes.
+
+    The per-request pattern sidesteps the shared-connection thread
+    race entirely: each handler gets its own cursor space. sqlite
+    open is a few syscalls and reading the shared WAL file pages
+    that the OS already has cached, so the overhead is negligible
+    at the scale of a friend-group app.
+
+    Schema bootstrap is deliberately skipped here — it should have
+    already run via :func:`connect` at process startup.
+    """
+    return _open(Path(settings.db_path))

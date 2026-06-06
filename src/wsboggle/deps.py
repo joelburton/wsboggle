@@ -19,19 +19,31 @@ request extends the session by ``SESSION_TTL``.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 
 from fastapi import Depends, HTTPException, Request
 
-from wsboggle import auth
+from wsboggle import auth, db as db_module
 
 
 SESSION_COOKIE_NAME = "wsboggle_session"
 
 
-def get_db(request: Request) -> sqlite3.Connection:
-    """Return the shared sqlite3 connection from app state."""
-    conn: sqlite3.Connection = request.app.state.db
-    return conn
+def get_db(request: Request) -> Iterator[sqlite3.Connection]:
+    """Yield a per-request sqlite3 connection; close on teardown.
+
+    The process-wide connection on ``app.state.db`` is reserved for
+    the WS layer (event-loop-single-threaded). HTTP handlers run on
+    FastAPI's threadpool, and two concurrent requests on the same
+    cursor space surface as ``sqlite3.InterfaceError: bad parameter
+    or other API misuse``. Per-request connections sidestep that
+    entirely; sqlite open over an already-cached WAL file is cheap.
+    """
+    conn = db_module.get_request_connection()
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def current_user(
