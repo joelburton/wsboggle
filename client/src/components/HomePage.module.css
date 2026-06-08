@@ -11,7 +11,14 @@
   margin-bottom: 2rem;
 }
 
-.header h1 { margin: 0; font-size: 1.5rem; }
+.header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.header h1 img { width: 1.6em; height: 1.6em; display: block; }
 
 .identity { color: #6b7280; font-size: 0.9rem; }
 .identity strong { color: #1f2937; }

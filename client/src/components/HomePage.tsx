@@ -41,7 +41,10 @@ export function HomePage({ me, onLogout }: Props) {
   return (
     <div className={styles.wrapper}>
       <header className={styles.header}>
-        <h1>wsboggle</h1>
+        <h1>
+          <img src="/favicon.svg" alt="" />
+          Mothtiles
+        </h1>
         <div className={styles.identity}>
           <strong>@{me.user.handle}</strong>{" "}
           <button className="secondary" onClick={logout}>

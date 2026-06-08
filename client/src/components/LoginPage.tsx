@@ -37,7 +37,7 @@ export function LoginPage({ onSuccess }: Props) {
   return (
     <div className={styles.wrapper}>
       <form className={styles.card} onSubmit={submit}>
-        <h1>Sign in to wsboggle</h1>
+        <h1>Sign in to Mothtiles</h1>
         {error && <div className={styles.error}>{error}</div>}
 
         <label className={styles.field}>
